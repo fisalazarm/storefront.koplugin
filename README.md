@@ -90,6 +90,10 @@ The UI is built around four dedicated dialogs.
 | Missing README | Repo lacks `README.md` or request failed | Confirm file exists upstream, then rerun **View README** while online |
 | Patch not listed | Repository is not named `KOReader.patches` (or similar) and/or the `koreader-user-patch` topic is missing | Ask the maintainer to add the correct topic |
 
+## Web Browser Access
+
+You can also browse the repository list from your PC browser by visiting [https://omer-faruq.github.io/appstore.koplugin/](https://omer-faruq.github.io/appstore.koplugin/), or by downloading and opening the `docs/index.html` file locally.
+
 ## Credits
 
 This plugin and documentation were prepared with Windsurf (AI).
