@@ -105,6 +105,11 @@ input:focus,select:focus{border-color:var(--accent)}
 .topic-tag{background:var(--tag);color:var(--text2);font-size:.7rem;padding:.15rem .5rem;border-radius:10px}
 .repo-actions{margin-top:.6rem;display:flex;gap:.5rem}
 .btn-sm{font-size:.78rem;padding:.3rem .7rem}
+/* Fork badge */
+.fork-badge{display:inline-flex;align-items:center;gap:.25rem;font-size:.72rem;color:var(--text3);background:var(--input-bg);border:1px solid var(--border);border-radius:10px;padding:.15rem .55rem;cursor:pointer;position:relative;transition:color .15s,border-color .15s}
+.fork-badge:hover{color:var(--accent2);border-color:var(--accent)}
+.fork-popup{position:absolute;top:calc(100% + 6px);left:0;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:.5rem .75rem;font-size:.8rem;color:var(--text);white-space:nowrap;box-shadow:var(--shadow);z-index:10;display:none}
+.fork-popup.visible{display:block}
 
 /* Loading & empty states */
 .state-msg{text-align:center;padding:3rem 1rem;color:var(--text3)}
@@ -743,14 +748,14 @@ const app = {
     const stars = repo.stargazers_count || 0;
     const lang = repo.language || '';
     const langColor = LANG_COLORS[lang] || '#888';
-    const topics = (repo.topics || []).slice(0, 6);
+    const topics = (repo.topics || []).slice(0, 15);
     const updatedLabel = timeAgo(repo.pushed_at);
     const createdLabel = shortDate(repo.created_at);
 
     return `
     <div class="repo-card">
       <div class="repo-card-header">
-        <div class="repo-name"><a href="${repo.html_url}" target="_blank" rel="noopener">${esc(fullName)}</a></div>
+        <div class="repo-name"><a href="${repo.html_url}" target="_blank" rel="noopener">${esc(fullName)}</a>${repo.fork ? ` <span class="fork-badge" onclick="app.showForkSource(event,'${esc(owner)}','${esc(name)}')">🔀 Fork<span class="fork-popup" id="fork-pop-${esc(owner)}-${esc(name)}"></span></span>` : ''}</div>
         <div class="repo-stars">⭐ ${stars}</div>
       </div>
       <div class="repo-desc">${desc}</div>
@@ -788,6 +793,41 @@ const app = {
 
   closeReadme() {
     document.getElementById('readmeModal').classList.remove('open');
+  },
+
+  // ─── Fork Source ───
+  forkSourceCache: {},
+  async showForkSource(e, owner, repo) {
+    e.stopPropagation();
+    const popId = `fork-pop-${owner}-${repo}`;
+    const pop = document.getElementById(popId);
+    if (!pop) return;
+    // Toggle off if already visible
+    if (pop.classList.contains('visible')) { pop.classList.remove('visible'); return; }
+    // Close any other open fork popups
+    document.querySelectorAll('.fork-popup.visible').forEach(p => p.classList.remove('visible'));
+    const key = `${owner}/${repo}`;
+    if (this.forkSourceCache[key]) {
+      pop.innerHTML = this.forkSourceCache[key];
+      pop.classList.add('visible');
+      return;
+    }
+    pop.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span>';
+    pop.classList.add('visible');
+    try {
+      const data = await GitHub.request(`/repos/${owner}/${repo}`);
+      const parent = data.parent;
+      if (parent) {
+        const html = `Forked from <a href="${parent.html_url}" target="_blank" rel="noopener">${esc(parent.full_name)}</a> ⭐ ${parent.stargazers_count || 0}`;
+        this.forkSourceCache[key] = html;
+        pop.innerHTML = html;
+      } else {
+        pop.innerHTML = 'Fork source unknown';
+        this.forkSourceCache[key] = 'Fork source unknown';
+      }
+    } catch (err) {
+      pop.innerHTML = 'Failed to load source';
+    }
   },
 
   // ─── Patch Files ───
@@ -920,6 +960,11 @@ document.addEventListener('keydown', e => {
   // Set initial positions
   requestAnimationFrame(() => updatePositions(false));
 })();
+
+// Close fork popups on outside click
+document.addEventListener('click', () => {
+  document.querySelectorAll('.fork-popup.visible').forEach(p => p.classList.remove('visible'));
+});
 
 // Boot
 app.init();
