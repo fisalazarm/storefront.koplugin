@@ -477,7 +477,42 @@ const app = {
     }
   },
 
+  DEFAULTS: { tab: 'plugins', sort: 'stars_desc', q: '', owner: '', stars: 0, forks: true, readme_plugins: false, readme_patches: true },
+
   get ts() { return this.tabState[this.tab]; },
+
+  loadFromURL() {
+    const p = new URLSearchParams(window.location.search);
+    const tab = p.get('tab');
+    if (tab === 'plugins' || tab === 'patches') this.tab = tab;
+    const sort = p.get('sort');
+    if (sort && ['stars_desc','updated_desc','created_desc','name_asc'].includes(sort)) this.sortMode = sort;
+    const s = this.ts;
+    if (p.has('q')) s.query = p.get('q').toLowerCase();
+    if (p.has('owner')) s.ownerFilter = p.get('owner').toLowerCase();
+    if (p.has('stars')) s.minStars = Math.max(0, parseInt(p.get('stars')) || 0);
+    if (p.has('forks')) s.includeForks = p.get('forks') !== '0';
+    if (p.has('readme')) s.readmeSearch = p.get('readme') === '1';
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === this.tab));
+    document.getElementById('sortSelect').value = this.sortMode;
+  },
+
+  syncURL() {
+    const s = this.ts;
+    const d = this.DEFAULTS;
+    const p = new URLSearchParams();
+    if (this.tab !== d.tab) p.set('tab', this.tab);
+    if (this.sortMode !== d.sort) p.set('sort', this.sortMode);
+    if (s.query) p.set('q', s.query);
+    if (s.ownerFilter) p.set('owner', s.ownerFilter);
+    if (s.minStars > 0) p.set('stars', s.minStars);
+    if (!s.includeForks) p.set('forks', '0');
+    const defaultReadme = this.tab === 'patches' ? d.readme_patches : d.readme_plugins;
+    if (s.readmeSearch !== defaultReadme) p.set('readme', s.readmeSearch ? '1' : '0');
+    const qs = p.toString();
+    const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    history.replaceState(null, '', newUrl);
+  },
 
   toggleTheme() {
     const current = document.documentElement.getAttribute('data-theme');
@@ -498,6 +533,7 @@ const app = {
     this.applyTheme(Storage.get('theme') || 'dark');
     const savedSort = Storage.get('sort_mode');
     if (savedSort) { this.sortMode = savedSort; document.getElementById('sortSelect').value = savedSort; }
+    this.loadFromURL();
     if (!Storage.persistent) {
       document.getElementById('statsBar').innerHTML = '⚠️ localStorage unavailable (file:// mode). Settings will not persist across sessions.';
     }
@@ -591,6 +627,7 @@ const app = {
     this.tab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     this.syncControlsToTab();
+    this.syncURL();
     if (!this.data[tab] && !this.loading[tab]) {
       this.refreshData();
     } else {
@@ -618,6 +655,7 @@ const app = {
   onMinStarsChange(value) {
     this.ts.minStars = Math.max(0, parseInt(value) || 0);
     this.updateFilterBanner();
+    this.syncURL();
     this.render();
   },
 
@@ -629,6 +667,7 @@ const app = {
       this.hideSearchOverlay();
     }
     this.updateFilterBanner();
+    this.syncURL();
     this.render();
   },
 
@@ -639,12 +678,14 @@ const app = {
     s.minStars = 0;
     s.includeForks = true;
     this.syncControlsToTab();
+    this.syncURL();
     this.render();
   },
 
   onOwnerInput(value) {
     this.ts.ownerFilter = value.trim().toLowerCase();
     this.updateFilterBanner();
+    this.syncURL();
     this.render();
   },
 
@@ -669,12 +710,14 @@ const app = {
   onSortChange(value) {
     this.sortMode = value;
     Storage.set('sort_mode', value);
+    this.syncURL();
     this.render();
   },
 
   onIncludeForksToggle(checked) {
     this.ts.includeForks = checked;
     this.updateFilterBanner();
+    this.syncURL();
     this.render();
   },
 
@@ -684,6 +727,7 @@ const app = {
       this.applyFilter();
     }
     this.updateFilterBanner();
+    this.syncURL();
     this.render();
   },
 
