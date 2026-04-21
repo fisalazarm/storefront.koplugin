@@ -21,6 +21,7 @@ local TextWidget = require("ui/widget/textwidget")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local CheckButton = require("ui/widget/checkbutton")
+local ButtonDialog = require("ui/widget/buttondialog")
 local Font = require("ui/font")
 local InputDialog = require("ui/widget/inputdialog")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -56,6 +57,7 @@ local PATCH_TOPICS = { "koreader-user-patch" }
 local PLUGIN_NAME_QUERIES = { 'in:name ".koplugin"' }
 local PATCH_NAME_QUERIES = { 'in:name "KOReader.patches"' }
 local BROWSER_STATE_KEY = "browser_state"
+local INCLUDE_ZERO_STAR_FORKS_KEY = "include_zero_star_forks"
 local PATCH_CACHE_TTL = 10 * 60
 local DEFAULT_SORT_MODE = "stars_desc"
 
@@ -2478,6 +2480,7 @@ AppStoreBrowserDialog = InputContainer:extend{
     on_prev_page = nil,
     on_next_page = nil,
     on_dismiss = nil,
+    on_settings_tap = nil,
 }
 
 function AppStoreBrowserDialog:init()
@@ -2497,6 +2500,12 @@ function AppStoreBrowserDialog:init()
         title = self.title,
         fullscreen = false,
         with_bottom_line = true,
+        left_icon = "appbar.settings",
+        left_icon_tap_callback = function()
+            if self.on_settings_tap then
+                self.on_settings_tap()
+            end
+        end,
         close_callback = function()
             UIManager:close(self)
         end,
@@ -3621,6 +3630,14 @@ function AppStore:getCacheWarning(kind)
     return nil, false
 end
 
+-- Returns true when the raw GitHub repo payload marks this entry as a fork.
+-- The full API response is cached as `repo.data`, so no extra request is needed.
+local function repoIsFork(repo)
+    if not repo then return false end
+    if repo.fork == true then return true end
+    return repo.data and repo.data.fork == true or false
+end
+
 local function formatRepoEntry(repo, opts)
     opts = opts or {}
     local include_description = opts.include_description ~= false
@@ -3629,6 +3646,10 @@ local function formatRepoEntry(repo, opts)
     local title = repo.full_name or repo.name or _("Repository")
     local stars = tonumber(repo.stars) or 0
     local meta = string.format("⭐ %d", stars)
+    if repoIsFork(repo) then
+        -- Keep the badge short; the browser list has limited horizontal room.
+        meta = meta .. " · " .. _("(fork)")
+    end
     table.insert(lines, string.format("• %s — %s", title, meta))
     local description = normalizeDescription(repo.description)
     if include_description and description ~= "" then
@@ -3797,6 +3818,9 @@ function AppStore:makePatchMenuItem(repo, patch)
     end
     local repo_title = repo.full_name or repo.name or ""
     if repo_title ~= "" then
+        if repoIsFork(repo) then
+            repo_title = repo_title .. " " .. _("(fork)")
+        end
         table.insert(lines, "  " .. repo_title)
     end
     return {
@@ -4055,6 +4079,9 @@ function AppStore:showBrowser(kind)
         page = self.browser_state.page,
         total_pages = total_pages,
         scroll_offset = self.browser_state.scroll_offset,
+        on_settings_tap = function()
+            self:showAppStoreSettingsDialog()
+        end,
         on_prev_page = function()
             if self.browser_state.page > 1 then
                 self:resetBrowserScrollState()
@@ -4202,6 +4229,46 @@ function AppStore:showFilterDialog()
     dialog:onShowKeyboard()
 end
 
+function AppStore:showAppStoreSettingsDialog()
+    -- Opened via the gear icon on the browser title bar.
+    -- Keep the toggle list minimal; additional settings can be added below as
+    -- the plugin grows. The first entry is the Include 0-star forks toggle,
+    -- which controls whether `fork:only stars:0` is queried on refresh.
+    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+    local mark = include_zero and "\xE2\x98\x91" or "\xE2\x98\x90" -- 
+    local dialog
+    local buttons = {
+        {
+            {
+                text = string.format("%s  %s", mark, _("Include 0-star forks")),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    AppStoreSettings:saveSetting(INCLUDE_ZERO_STAR_FORKS_KEY, not include_zero)
+                    AppStoreSettings:flush()
+                    UIManager:close(dialog)
+                    -- Reopen with the updated state so the user can see the
+                    -- toggle take effect without leaving the settings view.
+                    self:showAppStoreSettingsDialog()
+                end,
+            },
+        },
+        {
+            {
+                text = _("Close"),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(dialog)
+                end,
+            },
+        },
+    }
+    dialog = ButtonDialog:new{
+        title = _("AppStore settings"),
+        title_align = "center",
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
 
 function AppStore:getStatusLines()
     local status_lines = { _("AppStore") }
@@ -4918,12 +4985,20 @@ local function timestampToDate(ts)
 end
 
 local function expandQueryForForkStarSplit(base_query)
-    return {
-        base_query .. " fork:only stars:0",
+    -- When `include_zero_star_forks` is disabled (the default), we intentionally
+    -- skip the `fork:only stars:0` query so that 0-star forks are never
+    -- downloaded from the API. They are typically personal copies that clutter
+    -- search results without providing any shared value.
+    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+    local queries = {
         base_query .. " fork:only stars:>=1",
         base_query .. " stars:0",
         base_query .. " stars:>=1",
     }
+    if include_zero then
+        table.insert(queries, 1, base_query .. " fork:only stars:0")
+    end
+    return queries
 end
 
 local function buildRateLimitMessage()

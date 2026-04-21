@@ -231,7 +231,7 @@ input:focus,select:focus{border-color:var(--accent)}
     <span>⭐ Min:</span>
     <input type="number" id="minStarsInput" min="0" value="0" onkeydown="app.onMinStarsKeydown(event)" onchange="app.onMinStarsChange(this.value)">
   </div>
-  <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--text3);cursor:pointer">
+  <label id="includeForksLabel" style="display:none;align-items:center;gap:.4rem;font-size:.8rem;color:var(--text3);cursor:pointer">
     <input type="checkbox" id="includeForks" checked onchange="app.onIncludeForksToggle(this.checked)"> Include Forks
   </label>
   <label style="display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--text3);cursor:pointer">
@@ -272,9 +272,18 @@ input:focus,select:focus{border-color:var(--accent)}
           <a href="https://github.com/settings/tokens" target="_blank">Create token</a> (no scopes needed, public repo access is sufficient).
         </div>
       </div>
-      <div style="display:flex;gap:.5rem;align-items:center">
+      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:1.25rem">
         <button class="btn-secondary btn-sm" onclick="app.testToken()">Test Token</button>
         <span id="tokenStatus"></span>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:1rem;margin-top:.5rem">
+        <label style="display:flex;align-items:center;justify-content:flex-start;gap:.5rem;cursor:pointer;margin-bottom:.3rem;color:var(--text);font-size:.9rem">
+          <input type="checkbox" id="includeZeroStarForksInput" style="width:auto;margin:0;cursor:pointer;flex:0 0 auto" onchange="app.onIncludeZeroStarForksToggle(this.checked)">
+          <span>Include 0-star forks</span>
+        </label>
+        <div class="form-hint">
+          When off (default), forks with 0 stars are skipped at the API level — they never reach the client. Most 0-star forks are personal copies that clutter search results. Enable this to include them. Toggling updates the URL and refreshes the repo list for all tabs.
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -587,7 +596,9 @@ const app = {
     }
   },
 
-  DEFAULTS: { tab: 'plugins', sort: 'stars_desc', q: '', owner: '', stars: 0, forks: true, readme_plugins: false, readme_patches: true },
+  DEFAULTS: { tab: 'plugins', sort: 'stars_desc', q: '', owner: '', stars: 0, forks: true, readme_plugins: false, readme_patches: true, zeroStarForks: false },
+
+  includeZeroStarForks: false,
 
   get ts() { return this.tabState[this.tab]; },
 
@@ -603,6 +614,7 @@ const app = {
     if (p.has('stars')) s.minStars = Math.max(0, parseInt(p.get('stars')) || 0);
     if (p.has('forks')) s.includeForks = p.get('forks') !== '0';
     if (p.has('readme')) s.readmeSearch = p.get('readme') === '1';
+    this.includeZeroStarForks = p.get('zerostarforks') === '1';
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === this.tab));
     document.getElementById('sortSelect').value = this.sortMode;
   },
@@ -616,9 +628,11 @@ const app = {
     if (s.query) p.set('q', s.query);
     if (s.ownerFilter) p.set('owner', s.ownerFilter);
     if (s.minStars > 0) p.set('stars', s.minStars);
-    if (!s.includeForks) p.set('forks', '0');
+    // Include Forks filter is only surfaced when 0-star forks are included, otherwise it is ignored.
+    if (this.includeZeroStarForks && !s.includeForks) p.set('forks', '0');
     const defaultReadme = this.tab === 'patches' ? d.readme_patches : d.readme_plugins;
     if (s.readmeSearch !== defaultReadme) p.set('readme', s.readmeSearch ? '1' : '0');
+    if (this.includeZeroStarForks) p.set('zerostarforks', '1');
     const qs = p.toString();
     const newUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
     history.replaceState(null, '', newUrl);
@@ -665,8 +679,15 @@ const app = {
     document.getElementById('minStarsInput').value = s.minStars || 0;
     document.getElementById('includeForks').checked = s.includeForks;
     document.getElementById('readmeSearch').checked = s.readmeSearch;
+    this.updateIncludeForksVisibility();
     this.updateOwnerDatalist();
     this.updateFilterBanner();
+  },
+
+  updateIncludeForksVisibility() {
+    const label = document.getElementById('includeForksLabel');
+    if (!label) return;
+    label.style.display = this.includeZeroStarForks ? 'flex' : 'none';
   },
 
   updateFilterBanner() {
@@ -678,7 +699,8 @@ const app = {
     if (s.query) parts.push(`"${s.query}"`);
     if (s.ownerFilter) parts.push(`owner: ${s.ownerFilter}`);
     if (s.minStars > 0) parts.push(`≥${s.minStars} ⭐`);
-    if (!s.includeForks) parts.push('no forks');
+    if (this.includeZeroStarForks && !s.includeForks) parts.push('no forks');
+    if (this.includeZeroStarForks) parts.push('incl. 0★ forks');
     if (s.readmeSearch && s.query) parts.push('(+README)');
     
     const hasFilter = parts.length > 0;
@@ -695,17 +717,26 @@ const app = {
   loadCachedData() {
     const p = Storage.getJSON('cache_plugins');
     const pa = Storage.getJSON('cache_patches');
-    if (p && p.repos) this.data.plugins = p.repos;
-    if (pa && pa.repos) this.data.patches = pa.repos;
+    // Only accept caches whose 0-star-fork scope matches the current setting,
+    // so a URL that flips the flag triggers a fresh fetch instead of showing stale data.
+    if (p && p.repos && p.withZeroStarForks === this.includeZeroStarForks) this.data.plugins = p.repos;
+    if (pa && pa.repos && pa.withZeroStarForks === this.includeZeroStarForks) this.data.patches = pa.repos;
   },
 
   expandQueryForForkStarSplit(baseQuery) {
-    return [
-      `${baseQuery} fork:only stars:0`,
+    // When `includeZeroStarForks` is false we intentionally skip the `fork:only stars:0`
+    // query so that 0-star forks are never downloaded from the API. This is the main
+    // driver of noise in the results, so filtering server-side keeps the client list
+    // focused on meaningful repos.
+    const queries = [
       `${baseQuery} fork:only stars:>=1`,
       `${baseQuery} stars:0`,
       `${baseQuery} stars:>=1`,
     ];
+    if (this.includeZeroStarForks) {
+      queries.unshift(`${baseQuery} fork:only stars:0`);
+    }
+    return queries;
   },
 
   async fetchCategory(kind) {
@@ -743,7 +774,7 @@ const app = {
     try {
       const repos = await this.fetchCategory(active);
       this.data[active] = repos;
-      Storage.setJSON(`cache_${active}`, { repos, ts: Date.now() });
+      Storage.setJSON(`cache_${active}`, { repos, ts: Date.now(), withZeroStarForks: this.includeZeroStarForks });
     } catch (e) {
       console.error('Fetch error:', e);
       const msg = (e && e.message) ? e.message : String(e);
@@ -814,6 +845,8 @@ const app = {
   },
 
   clearFilter() {
+    // Note: this intentionally does NOT reset `includeZeroStarForks` — that setting
+    // controls the server-side query scope and must be managed from the Settings modal.
     const s = this.ts;
     s.query = '';
     s.ownerFilter = '';
@@ -861,6 +894,20 @@ const app = {
     this.updateFilterBanner();
     this.syncURL();
     this.render();
+  },
+
+  onIncludeZeroStarForksToggle(checked) {
+    this.includeZeroStarForks = checked;
+    this.updateIncludeForksVisibility();
+    this.updateFilterBanner();
+    this.syncURL();
+    // The server-side query set has changed, so existing caches are stale for both tabs.
+    // Drop them and re-fetch the active tab; the other tab will be fetched on next switch.
+    Storage.remove('cache_plugins');
+    Storage.remove('cache_patches');
+    this.data.plugins = null;
+    this.data.patches = null;
+    this.refreshData();
   },
 
   onReadmeSearchToggle(checked) {
@@ -958,7 +1005,9 @@ const app = {
   getFilteredRepos(repos) {
     const s = this.ts;
     let list = repos;
-    if (!s.includeForks) {
+    // The Include Forks toggle is only surfaced (and therefore only applied) when
+    // `includeZeroStarForks` is on; otherwise all loaded forks are considered relevant.
+    if (this.includeZeroStarForks && !s.includeForks) {
       list = list.filter(r => !r.fork);
     }
     if (s.ownerFilter) {
@@ -1157,6 +1206,7 @@ const app = {
     const token = Storage.get('github_pat') || '';
     document.getElementById('patInput').value = token;
     document.getElementById('tokenStatus').innerHTML = '';
+    document.getElementById('includeZeroStarForksInput').checked = this.includeZeroStarForks;
     document.getElementById('settingsModal').classList.add('open');
   },
 
@@ -1238,7 +1288,8 @@ const app = {
     if (s.query) filterDesc.push(`search: "${s.query}"`);
     if (s.ownerFilter) filterDesc.push(`owner: ${s.ownerFilter}`);
     if (s.minStars > 0) filterDesc.push(`≥${s.minStars}⭐`);
-    if (!s.includeForks) filterDesc.push('no forks');
+    if (this.includeZeroStarForks && !s.includeForks) filterDesc.push('no forks');
+    if (this.includeZeroStarForks) filterDesc.push('incl. 0★ forks');
     if (s.readmeSearch && s.query) filterDesc.push('+README');
     
     const filterLine = filterDesc.length > 0 ? ` (${filterDesc.join(', ')})` : '';

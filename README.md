@@ -82,6 +82,24 @@ The UI is built around four dedicated dialogs.
 - When cached data is older than 7 days, the banner reminds you to trigger **Refresh cache**.
 - README files, download archives, and installed SHAs are cached so subsequent operations reuse existing data whenever possible.
 
+## Include 0-Star Forks Setting
+
+By default, the AppStore plugin **excludes** repositories that are forks with zero stars from search results.
+
+### How It Works
+
+- **Default behavior (off)**: The plugin skips the `fork:only stars:0` query at the GitHub API level, so 0-star forks never reach your device. This reduces noise and speeds up browsing.
+- **When enabled**: The plugin includes an additional `fork:only stars:0` query, bringing all forks into the search results regardless of star count.
+
+### Accessing the Setting
+
+1. Open the **Plugins** or **Patches** browser.
+2. Tap the **gear icon** (⚙️) in the top-left corner of the title bar.
+3. Toggle **Include 0-star forks** on or off.
+4. The setting takes effect immediately and applies to all future cache refreshes.
+
+**Note**: Changing this setting does not automatically refresh the cache. Use the **Refresh cache** action from the toolbar to apply the new filter scope to your current results.
+
 ## Troubleshooting
 
 | Symptom | Likely Cause | Suggested Fix |
