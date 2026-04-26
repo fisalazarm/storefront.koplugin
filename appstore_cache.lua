@@ -7,7 +7,7 @@ local logger = require("logger")
 
 local Cache = {}
 
-local DB_SCHEMA_VERSION = 20241121
+local DB_SCHEMA_VERSION = 20260426
 local DB_DIRECTORY = ffiUtil.joinPath(DataStorage:getDataDir(), "cache/appstore")
 local DB_PATH = ffiUtil.joinPath(DB_DIRECTORY, "appstore.sqlite3")
 
@@ -38,6 +38,7 @@ local SCHEMA_STATEMENTS = {
         size INTEGER,
         download_url TEXT,
         fetched_at INTEGER NOT NULL,
+        source_pushed_at TEXT,
         UNIQUE(repo_id, path)
     );]],
     [[CREATE INDEX IF NOT EXISTS idx_patch_files_repo ON patch_files(repo_id);]],
@@ -86,12 +87,13 @@ local function normalizeNumber(value)
     return tonumber(value) or 0
 end
 
-function Cache.storePatchFiles(repo_id, entries)
+function Cache.storePatchFiles(repo_id, entries, source_pushed_at)
     repo_id = tonumber(repo_id)
     if not repo_id then
         return
     end
     local fetched_at = os.time()
+    local pushed_at_value = normalizeString(source_pushed_at)
     withConnection(function(conn)
         conn:exec("BEGIN;")
         local delete_stmt = conn:prepare([[DELETE FROM patch_files WHERE repo_id = ?;]])
@@ -99,8 +101,8 @@ function Cache.storePatchFiles(repo_id, entries)
         delete_stmt:step()
         delete_stmt:close()
         if entries and #entries > 0 then
-            local insert_sql = [[INSERT INTO patch_files (repo_id, path, filename, branch, sha, size, download_url, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);]]
+            local insert_sql = [[INSERT INTO patch_files (repo_id, path, filename, branch, sha, size, download_url, fetched_at, source_pushed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);]]
             local stmt = conn:prepare(insert_sql)
             for _, entry in ipairs(entries) do
                 stmt:bind(
@@ -111,7 +113,8 @@ function Cache.storePatchFiles(repo_id, entries)
                     normalizeString(entry.sha),
                     normalizeNumber(entry.size),
                     normalizeString(entry.download_url),
-                    fetched_at
+                    fetched_at,
+                    pushed_at_value
                 )
                 stmt:step()
                 stmt:reset()
@@ -119,6 +122,48 @@ function Cache.storePatchFiles(repo_id, entries)
             stmt:close()
         end
         conn:exec("COMMIT;")
+    end)
+end
+
+-- Returns the source_pushed_at timestamp (string) stored when the patch tree
+-- for this repo was last successfully fetched, or nil when there is no
+-- recorded value. The column is populated by storePatchFiles.
+function Cache.getPatchFilePushedAt(repo_id)
+    repo_id = tonumber(repo_id)
+    if not repo_id then
+        return nil
+    end
+    return withConnection(function(conn)
+        local stmt = conn:prepare([[SELECT source_pushed_at FROM patch_files
+            WHERE repo_id = ? AND source_pushed_at IS NOT NULL AND source_pushed_at <> ''
+            LIMIT 1;]])
+        stmt:bind(repo_id)
+        local row = stmt:step()
+        local value = row and row[1] or nil
+        stmt:close()
+        if value == nil or value == "" then
+            return nil
+        end
+        return tostring(value)
+    end)
+end
+
+-- Count of rows stored for the given repo. Used by the incremental patch
+-- refresh to decide whether a "no patch files" repo needs a re-fetch even
+-- when pushed_at has not changed (i.e. we've never successfully stored any
+-- rows for it before, typically because the previous attempt failed).
+function Cache.countPatchFiles(repo_id)
+    repo_id = tonumber(repo_id)
+    if not repo_id then
+        return 0
+    end
+    return withConnection(function(conn)
+        local stmt = conn:prepare([[SELECT COUNT(1) FROM patch_files WHERE repo_id = ?;]])
+        stmt:bind(repo_id)
+        local row = stmt:step()
+        local value = row and row[1] or 0
+        stmt:close()
+        return tonumber(value) or 0
     end)
 end
 
@@ -154,6 +199,49 @@ function Cache.listPatchFiles(repo_id)
             table.insert(result, row)
         end
         return result
+    end)
+end
+
+-- Delete patch_files rows for any repo_id not present in `valid_repo_ids`.
+-- Used by the incremental refresh to drop data for patch repositories that
+-- were removed from the search results since the previous refresh (e.g. a
+-- topic tag was removed or the repo no longer matches name filters). Without
+-- this, the incremental path would leave stale rows behind because it no
+-- longer wipes the whole table up-front.
+function Cache.pruneOrphanPatchFiles(valid_repo_ids)
+    valid_repo_ids = valid_repo_ids or {}
+    local lookup = {}
+    for _, repo_id in ipairs(valid_repo_ids) do
+        local numeric = tonumber(repo_id)
+        if numeric then
+            lookup[numeric] = true
+        end
+    end
+    withConnection(function(conn)
+        local existing_stmt = conn:prepare([[SELECT DISTINCT repo_id FROM patch_files;]])
+        local dataset = existing_stmt:resultset("hi")
+        existing_stmt:close()
+        local orphans = {}
+        if dataset and type(dataset[1]) == "table" then
+            for row_index = 1, #dataset[1] do
+                local repo_id = tonumber(dataset[1][row_index])
+                if repo_id and not lookup[repo_id] then
+                    table.insert(orphans, repo_id)
+                end
+            end
+        end
+        if #orphans == 0 then
+            return
+        end
+        conn:exec("BEGIN;")
+        local delete_stmt = conn:prepare([[DELETE FROM patch_files WHERE repo_id = ?;]])
+        for _, repo_id in ipairs(orphans) do
+            delete_stmt:bind(repo_id)
+            delete_stmt:step()
+            delete_stmt:reset()
+        end
+        delete_stmt:close()
+        conn:exec("COMMIT;")
     end)
 end
 

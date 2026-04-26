@@ -3893,21 +3893,66 @@ function AppStore:fetchPatchEntriesFromGitHub(repo)
     return entries
 end
 
-function AppStore:storePatchEntriesForRepo(repo)
+function AppStore:storePatchEntriesForRepo(repo, source_pushed_at)
     local repo_id = repo.repo_id or repo.id
     if not repo_id then
         return
     end
     local entries = self:fetchPatchEntriesFromGitHub(repo)
-    Cache.storePatchFiles(repo_id, entries)
+    Cache.storePatchFiles(repo_id, entries, source_pushed_at)
 end
 
+-- Incremental refresh of every patch repository's patch_files rows.
+-- For each repo we compare the freshly fetched pushed_at (from the search
+-- result stored in `repo.data`) against the pushed_at recorded the last time
+-- we successfully downloaded the tree. Unchanged repos skip the git/trees
+-- API call entirely. Repos that dropped out of the search results are pruned
+-- so that stale rows never survive across refreshes.
 function AppStore:refreshPatchFileListings()
-    Cache.clearPatchFiles("patch")
     local patch_repos = self:getRepoDescriptors("patch")
+
+    local valid_repo_ids = {}
     for _, repo in ipairs(patch_repos) do
-        self:storePatchEntriesForRepo(repo)
+        local repo_id = tonumber(repo.repo_id or repo.id)
+        if repo_id then
+            table.insert(valid_repo_ids, repo_id)
+        end
     end
+    if Cache.pruneOrphanPatchFiles then
+        Cache.pruneOrphanPatchFiles(valid_repo_ids)
+    end
+
+    local refreshed, skipped = 0, 0
+    for _, repo in ipairs(patch_repos) do
+        local repo_id = tonumber(repo.repo_id or repo.id)
+        local remote_pushed_at = repo.data and repo.data.pushed_at
+        if type(remote_pushed_at) ~= "string" or remote_pushed_at == "" then
+            remote_pushed_at = nil
+        end
+
+        local cached_pushed_at = repo_id and Cache.getPatchFilePushedAt
+            and Cache.getPatchFilePushedAt(repo_id) or nil
+        local cached_count = (repo_id and Cache.countPatchFiles)
+            and Cache.countPatchFiles(repo_id) or 0
+
+        -- A tree fetch is required when any of the following is true:
+        --   * We have no recorded pushed_at for this repo (first run after the
+        --     schema bump, a prior failure, or a brand-new repo).
+        --   * The remote pushed_at differs from the cached value.
+        --   * Cache has zero rows AND the remote repo has commits: a previous
+        --     attempt likely failed, so retry even if timestamps match.
+        local must_refetch = (not cached_pushed_at)
+            or (remote_pushed_at and cached_pushed_at ~= remote_pushed_at)
+            or (cached_count == 0)
+
+        if must_refetch then
+            self:storePatchEntriesForRepo(repo, remote_pushed_at)
+            refreshed = refreshed + 1
+        else
+            skipped = skipped + 1
+        end
+    end
+    logger.dbg("AppStore patch tree refresh: refreshed=", refreshed, "skipped=", skipped)
 end
 
 function AppStore:getPatchEntriesForRepo(repo)
@@ -5200,9 +5245,15 @@ local function appendUniqueRepo(target, seen, repo)
 end
 
 -- GitHub Search API returns at most 1000 results per query.
--- To overcome this, queries are split across fork status and star count
--- (4-way: fork:only×stars:0, fork:only×stars:>=1, non-fork×stars:0, non-fork×stars:>=1).
--- If any sub-query still hits the limit, it is further bisected by created date.
+-- Strategy (adaptive, applied per base query):
+--   1. Start with two server-side filtered queries per base: non-fork and
+--      fork. `include_zero_star_forks` controls whether 0-star forks are
+--      requested at all (they are filtered server-side, never client-side).
+--   2. Read `total_count` from the first real page (no dedicated probe) and:
+--        - if total_count < 1000 → paginate the branch normally;
+--        - if total_count >= 1000 → fall back to the legacy star split for
+--          that one branch, and then exhaustiveSearch handles any sub-query
+--          that still overflows by bisecting on created:date.
 local SEARCH_RESULT_LIMIT = 1000
 local SEARCH_DATE_BISECT_MAX_DEPTH = 8
 local SEARCH_ORIGIN_DATE = "2010-01-01"
@@ -5217,21 +5268,39 @@ local function timestampToDate(ts)
     return os.date("%Y-%m-%d", ts)
 end
 
-local function expandQueryForForkStarSplit(base_query)
-    -- When `include_zero_star_forks` is disabled (the default), we intentionally
-    -- skip the `fork:only stars:0` query so that 0-star forks are never
-    -- downloaded from the API. They are typically personal copies that clutter
-    -- search results without providing any shared value.
-    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
-    local queries = {
-        base_query .. " fork:only stars:>=1",
-        base_query .. " stars:0",
-        base_query .. " stars:>=1",
-    }
-    if include_zero then
-        table.insert(queries, 1, base_query .. " fork:only stars:0")
+-- Build the minimal set of queries needed to cover both non-fork and fork
+-- repositories while honoring the `include_zero_star_forks` preference.
+-- GitHub Search default excludes forks unless `fork:only` or `fork:true` is
+-- specified, so we can split the work into two server-side filtered queries.
+-- When `include_zero` is false, 0-star forks are never downloaded; the
+-- `fork:only stars:>=1` qualifier keeps that filtering on GitHub's side.
+-- When the ecosystem grows past ~1000 results per sub-query the inner
+-- adaptive exhaustiveSearch handles the overflow by falling back to star
+-- splits and/or date bisection — see the 4-way STAR_SPLIT_SUFFIXES below.
+local NON_FORK_SUFFIX = ""
+local FORK_WITH_STARS_SUFFIX = " fork:only stars:>=1"
+local FORK_ANY_STARS_SUFFIX = " fork:only"
+
+-- Legacy-compatible star split used ONLY when a sub-query exceeds the
+-- GitHub 1000-result hard cap. Paired up with `include_zero_star_forks`
+-- the same way the original `expandQueryForForkStarSplit` did.
+local STAR_SPLIT_SUFFIXES_NONFORK = { " stars:0", " stars:>=1" }
+local STAR_SPLIT_SUFFIXES_FORK_DEFAULT = { " fork:only stars:>=1" }
+local STAR_SPLIT_SUFFIXES_FORK_WITH_ZERO = { " fork:only stars:0", " fork:only stars:>=1" }
+
+-- When a single adaptive query hits the 1000-result ceiling we fall back to
+-- the legacy star-split approach for that branch. The split suffixes are
+-- applied to `base_query` (without the fork suffix) so callers can pick the
+-- matching set based on whether the failing query is the non-fork or the
+-- fork branch.
+local function starSplitSuffixes(branch, include_zero)
+    if branch == "nonfork" then
+        return STAR_SPLIT_SUFFIXES_NONFORK
     end
-    return queries
+    if include_zero then
+        return STAR_SPLIT_SUFFIXES_FORK_WITH_ZERO
+    end
+    return STAR_SPLIT_SUFFIXES_FORK_DEFAULT
 end
 
 local function buildRateLimitMessage()
@@ -5241,43 +5310,60 @@ local function buildRateLimitMessage()
     return _("GitHub API rate limit exceeded. Add a GitHub token in AppStore settings to increase the limit (10→30 req/min).")
 end
 
--- Paginate a single query up to the API limit, calling append for each repo.
--- Returns (total_count, error_info_or_nil).
-local function paginateQuery(query, append)
-    local per_page = 100
-    local page = 1
-    local total_count = 0
-    while true do
-        local response, err = GitHub.searchRepositories({
-            q = query,
-            per_page = per_page,
-            sort = "stars",
-            order = "desc",
-            page = page,
-        })
-        if not response then
-            return nil, err
+-- Issue one Search API call for `query` at the given page. Returns
+-- `response_table, err_info`. On rate-limit it raises a user-facing error
+-- (caught by the caller in pcall) so the refresh can surface the limit
+-- message without silently dropping data.
+local function performSearchPage(query, page, per_page)
+    local response, err = GitHub.searchRepositories({
+        q = query,
+        per_page = per_page,
+        sort = "stars",
+        order = "desc",
+        page = page,
+    })
+    if not response then
+        if type(err) == "table" and err.is_rate_limit then
+            error(buildRateLimitMessage())
         end
-        if page == 1 then
-            total_count = tonumber(response.total_count) or 0
+    end
+    return response, err
+end
+
+-- Paginate `query` starting at `start_page`, invoking `append(repo)` for
+-- every result. Returns err_info on failure (after any collected items
+-- have been appended), or nil on completion.
+local function paginateFromPage(query, append, start_page)
+    local per_page = 100
+    local page = start_page or 1
+    while true do
+        local response, err = performSearchPage(query, page, per_page)
+        if not response then
+            return err
         end
         local items = response.items or {}
         if #items == 0 then
-            break
+            return nil
         end
         for _, repo in ipairs(items) do
             append(repo)
         end
         if #items < per_page then
-            break
+            return nil
         end
         page = page + 1
     end
-    return total_count
 end
 
--- Exhaustively fetch all results for a query, automatically bisecting
--- by created-date range when results hit the GitHub 1000-result ceiling.
+-- Exhaustively fetch all results for `base_query`, dynamically falling back
+-- to date bisection when a query exceeds GitHub's 1000-result hard limit.
+--
+-- Key difference from the legacy version: there is no dedicated probe
+-- call. The first page (per_page=100) already reports `total_count`, so we
+-- consume that page directly, branch based on the reported total, and only
+-- continue paginating when we are safely under the limit. This saves one
+-- API call per sub-query in the common case where the ecosystem has fewer
+-- than 1000 repos per branch (which is the current KOReader reality).
 local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
     depth = depth or 0
 
@@ -5286,48 +5372,49 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
         query = base_query .. string.format(" created:%s..%s", date_from, date_to)
     end
 
-    -- Probe first page to learn total_count
-    local probe_response, probe_err = GitHub.searchRepositories({
-        q = query, per_page = 1, sort = "stars", order = "desc", page = 1,
-    })
-    if not probe_response then
-        if type(probe_err) == "table" and probe_err.is_rate_limit then
-            error(buildRateLimitMessage())
-        end
-        logger.warn("AppStore exhaustive search probe failed", query, probe_err and probe_err.body or probe_err)
+    local first_response, first_err = performSearchPage(query, 1, 100)
+    if not first_response then
+        logger.warn("AppStore search first-page error", query, first_err and first_err.body or first_err)
         return
     end
 
-    local total_count = tonumber(probe_response.total_count) or 0
+    local total_count = tonumber(first_response.total_count) or 0
+    local first_items = first_response.items or {}
+
+    -- Always consume the first page's items; they are highest-starred and
+    -- appendUniqueRepo deduplicates against later bisected sub-queries.
+    for _, repo in ipairs(first_items) do
+        append(repo)
+    end
 
     if total_count < SEARCH_RESULT_LIMIT or depth >= SEARCH_DATE_BISECT_MAX_DEPTH then
         if total_count >= SEARCH_RESULT_LIMIT then
             logger.warn("AppStore: date bisect depth limit reached, some results may be lost", query, total_count)
         end
-        -- Safe to paginate normally
-        local _, err = paginateQuery(query, append)
-        if err then
-            if type(err) == "table" and err.is_rate_limit then
-                error(buildRateLimitMessage())
+        -- Fetch remaining pages if there could be more results beyond page 1.
+        if #first_items >= 100 then
+            local err = paginateFromPage(query, append, 2)
+            if err then
+                logger.warn("AppStore pagination error", query, err)
             end
-            logger.warn("AppStore exhaustive search pagination error", query, err)
         end
         return
     end
 
-    -- total_count >= 1000 — bisect by created date
+    -- total_count >= 1000 — bisect by created date. We skip paginating the
+    -- flat query (the legacy probe path did the same) because the bisected
+    -- sub-queries will cover the remaining ranks via their date windows.
     logger.info("AppStore: query has", total_count, "results (>=1000), bisecting by date", query)
     local from_ts = date_from and dateToTimestamp(date_from) or dateToTimestamp(SEARCH_ORIGIN_DATE)
     local to_ts = date_to and dateToTimestamp(date_to) or os.time()
 
     if to_ts - from_ts < 86400 then
-        -- Date range too small to split, just take what we can
-        local _, err = paginateQuery(query, append)
-        if err then
-            if type(err) == "table" and err.is_rate_limit then
-                error(buildRateLimitMessage())
+        -- Date range too small to split, just take what we can from this range.
+        if #first_items >= 100 then
+            local err = paginateFromPage(query, append, 2)
+            if err then
+                logger.warn("AppStore pagination error (tiny range)", query, err)
             end
-            logger.warn("AppStore exhaustive search pagination error (tiny range)", query, err)
         end
         return
     end
@@ -5342,6 +5429,47 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
     exhaustiveSearch(base_query, append, next_date, to_str, depth + 1)
 end
 
+-- Run one adaptive branch (non-fork or fork) for `base_topic_query`, with
+-- automatic fallback to the legacy star split when the branch exceeds the
+-- 1000-result limit. The first-page response is used both to count results
+-- and to consume the first 100 items, so no extra probe call is issued.
+local function exhaustiveSearchAdaptive(base_topic_query, branch_suffix, append, branch)
+    local query = base_topic_query .. branch_suffix
+
+    local first_response, first_err = performSearchPage(query, 1, 100)
+    if not first_response then
+        logger.warn("AppStore adaptive search first-page error", query, first_err and first_err.body or first_err)
+        return
+    end
+
+    local total_count = tonumber(first_response.total_count) or 0
+    local first_items = first_response.items or {}
+
+    for _, repo in ipairs(first_items) do
+        append(repo)
+    end
+
+    if total_count < SEARCH_RESULT_LIMIT then
+        if #first_items >= 100 then
+            local err = paginateFromPage(query, append, 2)
+            if err then
+                logger.warn("AppStore adaptive pagination error", query, err)
+            end
+        end
+        return
+    end
+
+    -- Over the 1000-result cap: fall back to the legacy star split for this
+    -- branch and let exhaustiveSearch handle date bisection if any sub-query
+    -- still overflows.
+    logger.info("AppStore: adaptive branch exceeded limit, falling back to star split",
+        query, total_count)
+    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+    for _, suffix in ipairs(starSplitSuffixes(branch, include_zero)) do
+        exhaustiveSearch(base_topic_query .. suffix, append)
+    end
+end
+
 function AppStore:fetchAndStore(kind, topics, label, name_queries)
     local collected = {}
     local seen = {}
@@ -5349,7 +5477,9 @@ function AppStore:fetchAndStore(kind, topics, label, name_queries)
         appendUniqueRepo(collected, seen, repo)
     end
 
-    -- Build base topic query (without fork/star qualifiers)
+    -- Topic-based query: run the adaptive non-fork + fork pair. Each branch
+    -- falls back to the legacy star split only when it individually exceeds
+    -- the 1000-result GitHub cap (rare for the KOReader ecosystem).
     if topics then
         local parts = {}
         for _, topic in ipairs(topics) do
@@ -5358,20 +5488,24 @@ function AppStore:fetchAndStore(kind, topics, label, name_queries)
             end
         end
         local base_topic_query = table.concat(parts, " ")
-        local split_queries = expandQueryForForkStarSplit(base_topic_query)
-        for _, query in ipairs(split_queries) do
-            exhaustiveSearch(query, append)
+        if base_topic_query ~= "" then
+            -- Non-fork branch (default GitHub behavior excludes forks).
+            exhaustiveSearchAdaptive(base_topic_query, NON_FORK_SUFFIX, append, "nonfork")
+            -- Fork branch: suffix honors `include_zero_star_forks` server-side.
+            local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+            local fork_suffix = include_zero and FORK_ANY_STARS_SUFFIX or FORK_WITH_STARS_SUFFIX
+            exhaustiveSearchAdaptive(base_topic_query, fork_suffix, append, "fork")
         end
     end
 
-    -- Name-based queries (also split 4-way)
+    -- Name-based queries: same adaptive two-branch approach per base query.
     if name_queries then
+        local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+        local fork_suffix = include_zero and FORK_ANY_STARS_SUFFIX or FORK_WITH_STARS_SUFFIX
         for _, base_query in ipairs(name_queries) do
             if base_query and base_query ~= "" then
-                local split_queries = expandQueryForForkStarSplit(base_query)
-                for _, query in ipairs(split_queries) do
-                    exhaustiveSearch(query, append)
-                end
+                exhaustiveSearchAdaptive(base_query, NON_FORK_SUFFIX, append, "nonfork")
+                exhaustiveSearchAdaptive(base_query, fork_suffix, append, "fork")
             end
         end
     end
