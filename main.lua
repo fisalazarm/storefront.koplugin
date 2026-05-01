@@ -4,6 +4,7 @@ local LuaSettings = require("luasettings")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local FocusManager = require("ui/widget/focusmanager")
 local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
@@ -2469,7 +2470,57 @@ function AppStoreListItem:onAppStoreHold()
     return true
 end
 
-AppStoreBrowserDialog = InputContainer:extend{
+-- Visual focus feedback for non-touch / D-pad devices.
+-- The item is focusable only when its underlying entry exposes a callback.
+function AppStoreListItem:isFocusable()
+    if not self.entry then
+        return false
+    end
+    if self.entry.select_enabled == false then
+        return false
+    end
+    return self.entry.callback ~= nil or self.entry.hold_callback ~= nil
+end
+
+function AppStoreListItem:onFocus()
+    if not self.frame then
+        return true
+    end
+    self.frame.invert = true
+    UIManager:setDirty(self.show_parent or self, "fast")
+    return true
+end
+
+function AppStoreListItem:onUnfocus()
+    if not self.frame then
+        return true
+    end
+    self.frame.invert = false
+    UIManager:setDirty(self.show_parent or self, "fast")
+    return true
+end
+
+-- These two handlers receive synthetic Tap/Hold gestures dispatched by
+-- FocusManager:onPress / :onHold on non-touch devices. The framework points
+-- the gesture at the focused widget's centre, so the existing AppStoreTap /
+-- AppStoreHold GestureRange entries will already match. We add explicit
+-- handlers as a safety net so activation works even if the gesture range
+-- has not yet been registered (e.g. before the first paint).
+function AppStoreListItem:onTapSelect()
+    if self.dialog then
+        self.dialog:onEntryActivated(self.entry)
+    end
+    return true
+end
+
+function AppStoreListItem:onHoldSelect()
+    if self.entry and self.entry.hold_callback then
+        self.entry.hold_callback()
+    end
+    return true
+end
+
+AppStoreBrowserDialog = FocusManager:extend{
     AppStore = nil,
     title = "",
     items = nil,
@@ -2491,8 +2542,16 @@ function AppStoreBrowserDialog:init()
     self.height = self.screen_h
     self.dimen = Geom:new{ x = 0, y = 0, w = self.screen_w, h = self.screen_h }
 
+    -- Key bindings for non-touch / D-pad devices.
+    -- FocusManager already wires Up/Down/Left/Right/Press/Hold from KEY_EVENTS;
+    -- here we add page-flip and close shortcuts that are specific to this dialog.
     if Device:hasKeys() then
         self.key_events.Close = { { Input.group.Back } }
+        if Device:hasFewKeys() then
+            self.key_events.Close = { { "Left" } }
+        end
+        self.key_events.NextPage = { { Input.group.PgFwd } }
+        self.key_events.PrevPage = { { Input.group.PgBack } }
     end
 
     self.title_bar = TitleBar:new{
@@ -2512,6 +2571,11 @@ function AppStoreBrowserDialog:init()
         show_parent = self,
     }
 
+    -- Track focusable rows and their cumulative Y offsets inside list_group so
+    -- that focus moves can scroll the focused row into view on non-touch devices.
+    self._focusable_items = {}
+    self._focusable_row_offsets = {}
+
     local list_group = VerticalGroup:new{}
     local entry_width = self:getListEntryWidth()
     if self.items then
@@ -2520,8 +2584,12 @@ function AppStoreBrowserDialog:init()
                 entry = entry,
                 width = entry_width,
                 dialog = self,
+                show_parent = self,
             }
             list_group[#list_group + 1] = item_widget
+            if item_widget:isFocusable() then
+                self._focusable_items[#self._focusable_items + 1] = item_widget
+            end
             if entry.separator and idx < #self.items then
                 list_group[#list_group + 1] = LineWidget:new{
                     background = Blitbuffer.COLOR_LIGHT_GRAY,
@@ -2538,6 +2606,7 @@ function AppStoreBrowserDialog:init()
         bordersize = 0,
         list_group,
     }
+    self._list_group = list_group
 
     local prev_button = Button:new{
         text = _("Previous"),
@@ -2609,8 +2678,74 @@ function AppStoreBrowserDialog:init()
         self.content,
     }
 
+    -- Cache pagination buttons for layout / page change reflection.
+    self._prev_button = prev_button
+    self._next_button = next_button
+
+    -- Compute cumulative Y offsets of every list_group child relative to the
+    -- inner top of list_container. We rely on widgets reporting a stable size
+    -- via :getSize() at this point (TextBoxWidget has computed its lines).
+    -- Padding from FrameContainer is added so coordinates align with what the
+    -- ScrollableContainer paints.
+    do
+        local cursor_y = Size.padding.default
+        for _, child in ipairs(list_group) do
+            local size = child.getSize and child:getSize() or { h = 0 }
+            local h = size.h or 0
+            if child.isFocusable and child:isFocusable() then
+                self._focusable_row_offsets[child] = { y = cursor_y, h = h }
+            end
+            cursor_y = cursor_y + h
+        end
+    end
+
+    -- Build the FocusManager 2-D layout. Rows:
+    --   1) optional title bar buttons (settings gear, close X)
+    --   2) one row per focusable list item
+    --   3) footer { Previous, Next } pagination buttons
+    self.layout = {}
+    if self.title_bar.generateHorizontalLayout then
+        local title_rows = self.title_bar:generateHorizontalLayout()
+        for _, row in ipairs(title_rows) do
+            table.insert(self.layout, row)
+        end
+    end
+    local first_list_row_index = #self.layout + 1
+    for _, item_widget in ipairs(self._focusable_items) do
+        table.insert(self.layout, { item_widget })
+    end
+    local footer_row = {}
+    if self.page > 1 then
+        table.insert(footer_row, prev_button)
+    end
+    if self.page < self.total_pages then
+        table.insert(footer_row, next_button)
+    end
+    if #footer_row > 0 then
+        table.insert(self.layout, footer_row)
+    end
+
+    -- Initial focus: prefer the first focusable list item; otherwise fall
+    -- back to whatever the first valid layout row exposes. We use
+    -- FOCUS_ONLY_ON_NT so that touch users do not see an unsolicited focus
+    -- highlight on first paint, while D-pad users get visible focus.
+    if #self._focusable_items > 0 then
+        self.selected = { x = 1, y = first_list_row_index }
+    elseif #self.layout > 0 then
+        self.selected = { x = 1, y = 1 }
+    end
+
     if self.scroll_offset then
         self:setScrollOffset(self.scroll_offset)
+    end
+
+    if Device:hasDPad() and #self.layout > 0 then
+        UIManager:nextTick(function()
+            -- moveFocusTo only emits a Focus event on non-touch devices, which
+            -- avoids leaking the highlight onto touch UIs.
+            self:moveFocusTo(self.selected.x, self.selected.y, FocusManager.FOCUS_ONLY_ON_NT)
+            self:_ensureFocusedVisible()
+        end)
     end
 end
 
@@ -2645,6 +2780,57 @@ end
 function AppStoreBrowserDialog:onClose()
     UIManager:close(self)
     return true
+end
+
+-- Page-flip key handlers for non-touch / D-pad devices.
+function AppStoreBrowserDialog:onNextPage()
+    if self.page < self.total_pages and self.on_next_page then
+        self.on_next_page()
+    end
+    return true
+end
+
+function AppStoreBrowserDialog:onPrevPage()
+    if self.page > 1 and self.on_prev_page then
+        self.on_prev_page()
+    end
+    return true
+end
+
+-- After the FocusManager moves focus, scroll the inner ScrollableContainer so
+-- that the newly focused list row is visible. Title-bar / footer rows live
+-- outside the scrollable area and are skipped.
+function AppStoreBrowserDialog:_ensureFocusedVisible()
+    local focused = self:getFocusItem()
+    if not focused or not self.list_scroller then
+        return
+    end
+    local offset = self._focusable_row_offsets and self._focusable_row_offsets[focused]
+    if not offset then
+        return
+    end
+    local scroller = self.list_scroller
+    if not scroller._is_scrollable then
+        return
+    end
+    local scroll_y = scroller._scroll_offset_y or 0
+    local crop_h = scroller._crop_h or (scroller.dimen and scroller.dimen.h) or 0
+    if crop_h <= 0 then
+        return
+    end
+    local target_top = offset.y
+    local target_bottom = offset.y + offset.h
+    if target_top < scroll_y then
+        scroller:_scrollBy(0, target_top - scroll_y)
+    elseif target_bottom > scroll_y + crop_h then
+        scroller:_scrollBy(0, target_bottom - (scroll_y + crop_h))
+    end
+end
+
+function AppStoreBrowserDialog:onFocusMove(args)
+    local handled = FocusManager.onFocusMove(self, args)
+    self:_ensureFocusedVisible()
+    return handled
 end
 
 function AppStoreBrowserDialog:getScrollOffset()

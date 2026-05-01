@@ -108,6 +108,17 @@ By default, the AppStore plugin **excludes** repositories that are forks with ze
 | Missing README | Repo lacks `README.md` or request failed | Confirm file exists upstream, then rerun **View README** while online |
 | Patch not listed | Repository is not named `KOReader.patches` (or similar) and/or the `koreader-user-patch` topic is missing | Ask the maintainer to add the correct topic |
 
+## Non-touch devices (Kindle 4 NT, Kindle Keyboard, …)
+
+The AppStore plugin is fully usable on devices without a touchscreen. The browser and updates dialogs follow KOReader's standard non-touch conventions:
+
+- **Up / Down** — move focus between list rows; the list scrolls automatically when the focused row would otherwise be off-screen.
+- **Left / Right** — move focus across the title-bar buttons (gear / close) and the pagination row (Previous / Next), or between the top control buttons in the Updates dialog.
+- **Press** (centre key on the 5-way) — activate the focused entry, equivalent to a tap.
+- **Hold / Long-press** (where supported) — open the secondary action of the focused entry, equivalent to a tap-and-hold.
+- **Page-forward / Page-back** keys — flip to the next / previous page in the browser.
+- **Back** — close the dialog. On few-keys devices that do not provide a Back key (e.g. Kindle 4 NT), **Left** acts as the close shortcut, mirroring KOReader's built-in `Menu` widget.
+
 ## Web Browser Access
 
 You can also browse the repository list from your PC browser by visiting [https://omer-faruq.github.io/appstore.koplugin/](https://omer-faruq.github.io/appstore.koplugin/), or by downloading and opening the `docs/index.html` file locally.
