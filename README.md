@@ -60,11 +60,13 @@ The UI is built around four dedicated dialogs.
    - Lists repositories tagged as KOReader plugins.
    - Actions per entry: **Install / Update / Remove**, **View README**, open detail dialogs with description, stars, last updated timestamp, and repo owner.
    - Toolbar actions: switch to patches tab, refresh cache, adjust filters (`search text`, `owner`, `minimum stars`), change sorting (stars desc/asc, updated, name), and jump into the plugin update summary.
+   - **Gear icon (⚙️)**: Access settings including **Install plugin from URL** to manually install plugins by entering GitHub owner/repo.
 
 2. ### Patches Browser (`App Store · Patches`)
    - Lists repositories tagged as KOReader user patches and enumerates files matching `^[number]-*.lua`.
    - Actions per patch: **Install patch**, retry downloads, or open the repo README for full instructions.
    - Toolbar actions: mirror the plugin tab plus shortcuts to the patch update summary and a "matching patch" banner when reconciling installed files with remote entries.
+   - **Gear icon (⚙️)**: Access settings including **Install patch from URL** to manually install patches by entering GitHub owner/repo.
 
 3. ### Plugin Updates Dialog
    - Summarizes every installed plugin tracked by the AppStore cache.

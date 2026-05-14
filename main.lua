@@ -5337,6 +5337,7 @@ function AppStore:showAppStoreSettingsDialog()
     -- which controls whether `fork:only stars:0` is queried on refresh.
     local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
     local mark = include_zero and "\xE2\x98\x91" or "\xE2\x98\x90" -- 
+    local current_kind = (self.browser_state and self.browser_state.kind) or "plugin"
     local dialog
     local buttons = {
         {
@@ -5353,26 +5354,53 @@ function AppStore:showAppStoreSettingsDialog()
                 end,
             },
         },
-        {
-            {
-                text = _("Clear cached README files"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:clearCachedReadmeFiles()
-                end,
-            },
-        },
-        {
-            {
-                text = _("Close"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                end,
-            },
-        },
     }
+    
+    if current_kind == "plugin" then
+        table.insert(buttons, {
+            {
+                text = _("Install plugin from URL"),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:promptInstallPluginFromURL()
+                end,
+            },
+        })
+    else
+        table.insert(buttons, {
+            {
+                text = _("Install patch from URL"),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:promptInstallPatchFromURL()
+                end,
+            },
+        })
+    end
+    
+    table.insert(buttons, {
+        {
+            text = _("Clear cached README files"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                self:clearCachedReadmeFiles()
+            end,
+        },
+    })
+    
+    table.insert(buttons, {
+        {
+            text = _("Close"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+            end,
+        },
+    })
+    
     dialog = ButtonDialog:new{
         title = _("AppStore settings"),
         title_align = "center",
@@ -5407,6 +5435,285 @@ function AppStore:clearCachedReadmeFiles()
         end,
     }
     UIManager:show(confirm)
+end
+
+function AppStore:promptInstallPluginFromURL()
+    local dialog
+    dialog = MultiInputDialog:new{
+        title = _("Install plugin from GitHub"),
+        fields = {
+            {
+                description = _("Repository owner"),
+                text = "",
+                hint = _("e.g., koreader"),
+            },
+            {
+                description = _("Repository name"),
+                text = "",
+                hint = _("e.g., koreader"),
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    background = Blitbuffer.COLOR_WHITE,
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Continue"),
+                    background = Blitbuffer.COLOR_WHITE,
+                    is_enter_default = true,
+                    callback = function()
+                        local fields = dialog:getFields()
+                        local owner = util.trim(fields[1] or "")
+                        local repo_name = util.trim(fields[2] or "")
+                        if owner == "" or repo_name == "" then
+                            UIManager:show(InfoMessage:new{
+                                text = _("Both owner and repository name are required."),
+                                timeout = 3,
+                            })
+                            return
+                        end
+                        UIManager:close(dialog)
+                        self:fetchAndShowPluginRepo(owner, repo_name)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function AppStore:fetchAndShowPluginRepo(owner, repo_name)
+    if not owner or not repo_name then
+        return
+    end
+    local progress = InfoMessage:new{
+        text = string.format(_("Fetching repository %s/%s..."), owner, repo_name),
+        timeout = 0,
+    }
+    UIManager:show(progress)
+    UIManager:forceRePaint()
+    
+    NetworkMgr:runWhenOnline(function()
+        local full_name = owner .. "/" .. repo_name
+        local repo_data, err = GitHub.fetchRepoMetadata(owner, repo_name)
+        UIManager:close(progress)
+        
+        if not repo_data or not repo_data.id then
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("Repository %s not found on GitHub."), full_name),
+                timeout = 4,
+            })
+            return
+        end
+        
+        local repo = {
+            kind = "plugin",
+            name = repo_name,
+            owner = owner,
+            full_name = full_name,
+            id = repo_data.id,
+            repo_id = repo_data.id,
+            description = repo_data.description,
+            data = repo_data,
+        }
+        
+        self:promptRepoAction(repo)
+    end)
+end
+
+function AppStore:promptInstallPatchFromURL()
+    local dialog
+    dialog = MultiInputDialog:new{
+        title = _("Install patch from GitHub"),
+        fields = {
+            {
+                description = _("Repository owner"),
+                text = "",
+                hint = _("e.g., koreader"),
+            },
+            {
+                description = _("Repository name"),
+                text = "",
+                hint = _("e.g., koreader"),
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    background = Blitbuffer.COLOR_WHITE,
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Continue"),
+                    background = Blitbuffer.COLOR_WHITE,
+                    is_enter_default = true,
+                    callback = function()
+                        local fields = dialog:getFields()
+                        local owner = util.trim(fields[1] or "")
+                        local repo_name = util.trim(fields[2] or "")
+                        if owner == "" or repo_name == "" then
+                            UIManager:show(InfoMessage:new{
+                                text = _("Both owner and repository name are required."),
+                                timeout = 3,
+                            })
+                            return
+                        end
+                        UIManager:close(dialog)
+                        self:fetchAndShowPatchRepo(owner, repo_name)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+end
+
+function AppStore:fetchAndShowPatchRepo(owner, repo_name)
+    if not owner or not repo_name then
+        return
+    end
+    local progress = InfoMessage:new{
+        text = string.format(_("Fetching repository %s/%s..."), owner, repo_name),
+        timeout = 0,
+    }
+    UIManager:show(progress)
+    UIManager:forceRePaint()
+    
+    NetworkMgr:runWhenOnline(function()
+        local full_name = owner .. "/" .. repo_name
+        local repo_data, err = GitHub.fetchRepoMetadata(owner, repo_name)
+        
+        if not repo_data or not repo_data.id then
+            UIManager:close(progress)
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("Repository %s not found on GitHub."), full_name),
+                timeout = 4,
+            })
+            return
+        end
+        
+        local repo = {
+            kind = "patch",
+            name = repo_name,
+            owner = owner,
+            full_name = full_name,
+            id = repo_data.id,
+            repo_id = repo_data.id,
+            description = repo_data.description,
+            data = repo_data,
+        }
+        
+        local entries = self:fetchPatchEntriesFromGitHub(repo)
+        UIManager:close(progress)
+        
+        if not entries or #entries == 0 then
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("No patch files found in repository %s."), full_name),
+                timeout = 4,
+            })
+            return
+        end
+        
+        self:showPatchRepoActionDialog(repo, entries)
+    end)
+end
+
+function AppStore:showPatchRepoActionDialog(repo, entries)
+    if not repo or not entries then
+        return
+    end
+    
+    local dialog
+    local buttons_row = {
+        {
+            text = _("Install a patch"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                self:showPatchSelectionDialogForInstall(repo, entries)
+            end,
+        },
+        {
+            text = _("View README"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                self:showReadme(repo)
+            end,
+        },
+    }
+    
+    local lines = {}
+    local description = normalizeDescription(repo.description)
+    if description ~= "" then
+        lines[#lines + 1] = description
+    end
+    local ts = repo.data and (repo.data.pushed_at or repo.data.updated_at or repo.data.created_at)
+    if ts and ts ~= "" then
+        if description ~= "" then
+            lines[#lines + 1] = ""
+        end
+        lines[#lines + 1] = string.format(_("Updated: %s"), ts:sub(1, 10))
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = string.format(_("Patches found: %d"), #entries)
+    
+    dialog = ConfirmBox:new{
+        text = repo.full_name or repo.name or _("Repository"),
+        cancel_text = _("Close"),
+        no_ok_button = true,
+        other_buttons_first = true,
+        other_buttons = { buttons_row },
+    }
+    dialog:addWidget(makeTextBox(table.concat(lines, "\n")))
+    UIManager:show(dialog)
+end
+
+function AppStore:showPatchSelectionDialogForInstall(repo, entries)
+    if not repo or not entries or #entries == 0 then
+        return
+    end
+    
+    local dialog
+    local buttons = {}
+    for idx, entry in ipairs(entries) do
+        table.insert(buttons, {
+            {
+                text = entry.path or entry.display_path or _("patch"),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:installPatchFromRepo(repo, entry)
+                end,
+            },
+        })
+    end
+    
+    table.insert(buttons, {
+        {
+            text = _("Cancel"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+            end,
+        },
+    })
+    
+    dialog = ButtonDialog:new{
+        title = string.format(_("Select patch file from %s"), repo.full_name or repo.name),
+        buttons = buttons,
+        tap_close_callback = function()
+        end,
+    }
+    UIManager:show(dialog)
 end
 
 function AppStore:getStatusLines()
