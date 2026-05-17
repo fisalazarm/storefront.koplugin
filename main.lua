@@ -1331,8 +1331,12 @@ function AppStore:buildUpdateBrowserItems(summary)
     local items = {}
 
     items[#items + 1] = {
-        text = self:getUpdatesSummaryText(summary),
-        select_enabled = false,
+        text = "⮤ " .. _("Switch to plugin list"),
+        keep_menu_open = true,
+        callback = function()
+            self:closeUpdatesDialog(true)
+            self:showBrowser("plugin")
+        end,
     }
     items[#items].separator = true
 
@@ -1364,12 +1368,8 @@ function AppStore:buildUpdateBrowserItems(summary)
     items[#items].separator = true
 
     items[#items + 1] = {
-        text = "⮤ " .. _("Switch to plugin list"),
-        keep_menu_open = true,
-        callback = function()
-            self:closeUpdatesDialog(true)
-            self:showBrowser("plugin")
-        end,
+        text = self:getUpdatesSummaryText(summary),
+        select_enabled = false,
     }
     items[#items].separator = true
 
@@ -1388,8 +1388,12 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     local items = {}
 
     items[#items + 1] = {
-        text = self:getPatchUpdatesSummaryText(summary),
-        select_enabled = false,
+        text ="⮤ " .. _("Switch to patch list"),
+        keep_menu_open = true,
+        callback = function()
+            self:closePatchUpdatesDialog(true)
+            self:showBrowser("patch")
+        end,
     }
     items[#items].separator = true
 
@@ -1421,12 +1425,8 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     items[#items].separator = true
 
     items[#items + 1] = {
-        text ="⮤ " .. _("Switch to patch list"),
-        keep_menu_open = true,
-        callback = function()
-            self:closePatchUpdatesDialog(true)
-            self:showBrowser("patch")
-        end,
+        text = self:getPatchUpdatesSummaryText(summary),
+        select_enabled = false,
     }
     items[#items].separator = true
 
@@ -2690,6 +2690,7 @@ function AppStore:deletePlugin(dirname, record)
         return
     end
     
+    local delete_settings = false
     local confirm_box
     confirm_box = ConfirmBox:new{
         text = string.format(_("Delete plugin '%s'?\n\nThis action cannot be undone.\n\nChanges will take effect after restart."), display_name),
@@ -2698,6 +2699,22 @@ function AppStore:deletePlugin(dirname, record)
             local plugin_path = PLUGINS_ROOT .. "/" .. dirname
             local ok, err = deleteDirectoryRecursive(plugin_path)
             if ok then
+                if delete_settings then
+                    local PluginLoader = require("pluginloader")
+                    local instance = PluginLoader:getPluginInstance(dirname)
+                    if instance and type(instance.deletePluginSettings) == "function" then
+                        pcall(instance.deletePluginSettings, instance)
+                    end
+                    
+                    local settings_dir = DataStorage:getSettingsDir()
+                    local plugin_settings_file = settings_dir .. "/" .. dirname .. ".lua"
+                    os.remove(plugin_settings_file)
+                    os.remove(plugin_settings_file .. ".old")
+                    
+                    G_reader_settings:delSetting(dirname)
+                    G_reader_settings:flush()
+                end
+                
                 if record then
                     InstallStore.remove(dirname)
                 end
@@ -2714,6 +2731,17 @@ function AppStore:deletePlugin(dirname, record)
         end,
         cancel_text = _("Cancel"),
     }
+    
+    local check_button = CheckButton:new{
+        text = _("Also delete plugin settings"),
+        checked = false,
+        parent = confirm_box,
+        callback = function()
+            delete_settings = not delete_settings
+        end,
+    }
+    confirm_box:addWidget(check_button)
+    
     UIManager:show(confirm_box)
 end
 
