@@ -2690,6 +2690,14 @@ function AppStore:deletePlugin(dirname, record)
         return
     end
     
+    local PluginLoader = require("pluginloader")
+    local plugin_instance = PluginLoader:getPluginInstance(dirname)
+    local can_delete_settings = plugin_instance and (
+        type(plugin_instance.deletePluginSettings) == "function"
+        or plugin_instance.settings_file
+        or plugin_instance.settings_key
+    )
+    
     local delete_settings = false
     local confirm_box
     confirm_box = ConfirmBox:new{
@@ -2699,19 +2707,20 @@ function AppStore:deletePlugin(dirname, record)
             local plugin_path = PLUGINS_ROOT .. "/" .. dirname
             local ok, err = deleteDirectoryRecursive(plugin_path)
             if ok then
-                if delete_settings then
-                    local PluginLoader = require("pluginloader")
-                    local instance = PluginLoader:getPluginInstance(dirname)
-                    if instance and type(instance.deletePluginSettings) == "function" then
-                        pcall(instance.deletePluginSettings, instance)
+                if delete_settings and plugin_instance then
+                    if type(plugin_instance.deletePluginSettings) == "function" then
+                        pcall(plugin_instance.deletePluginSettings, plugin_instance)
                     end
                     
-                    local settings_dir = DataStorage:getSettingsDir()
-                    local plugin_settings_file = settings_dir .. "/" .. dirname .. ".lua"
-                    os.remove(plugin_settings_file)
-                    os.remove(plugin_settings_file .. ".old")
+                    if plugin_instance.settings_file then
+                        os.remove(plugin_instance.settings_file)
+                        os.remove(plugin_instance.settings_file .. ".old")
+                    end
                     
-                    G_reader_settings:delSetting(dirname)
+                    if plugin_instance.settings_key then
+                        G_reader_settings:delSetting(plugin_instance.settings_key)
+                    end
+                    
                     G_reader_settings:flush()
                 end
                 
@@ -2732,15 +2741,17 @@ function AppStore:deletePlugin(dirname, record)
         cancel_text = _("Cancel"),
     }
     
-    local check_button = CheckButton:new{
-        text = _("Also delete plugin settings"),
-        checked = false,
-        parent = confirm_box,
-        callback = function()
-            delete_settings = not delete_settings
-        end,
-    }
-    confirm_box:addWidget(check_button)
+    if can_delete_settings then
+        local check_button = CheckButton:new{
+            text = _("Also delete plugin settings"),
+            checked = false,
+            parent = confirm_box,
+            callback = function()
+                delete_settings = not delete_settings
+            end,
+        }
+        confirm_box:addWidget(check_button)
+    end
     
     UIManager:show(confirm_box)
 end
