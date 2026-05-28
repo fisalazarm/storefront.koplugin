@@ -2482,6 +2482,15 @@ function AppStore:promptUpdateAction(plugin, record)
     end
     
     table.insert(other_buttons_row2, {
+        text = _("Modify Plugin"),
+        background = Blitbuffer.COLOR_WHITE,
+        callback = function()
+            UIManager:close(info_box)
+            self:modifyPlugin(plugin)
+        end,
+    })
+
+    table.insert(other_buttons_row2, {
         text = _("Delete plugin"),
         background = Blitbuffer.COLOR_WHITE,
         callback = function()
@@ -2633,6 +2642,25 @@ function AppStore:promptPatchUpdateAction(patch_item)
     end
     
     table.insert(other_buttons_row2, {
+        text = _("Modify Patch"),
+        background = Blitbuffer.COLOR_WHITE,
+        callback = function()
+            UIManager:close(info_box)
+            local patch_path = PATCHES_ROOT .. "/" .. patch.filename
+            local PluginLoader = require("pluginloader")
+            local te = PluginLoader:getPluginInstance("texteditor")
+            if te and te.checkEditFile then
+                te:checkEditFile(patch_path)
+            else
+                UIManager:show(InfoMessage:new{
+                    text = _("Text editor plugin is not available."),
+                    timeout = 4,
+                })
+            end
+        end,
+    })
+
+    table.insert(other_buttons_row2, {
         text = _("Delete patch"),
         background = Blitbuffer.COLOR_WHITE,
         callback = function()
@@ -2650,6 +2678,328 @@ function AppStore:promptPatchUpdateAction(patch_item)
     }
     UIManager:show(info_box)
 end
+
+-- ─── Modify Plugin ────────────────────────────────────────────────────────────
+
+function AppStore:modifyPlugin(plugin)
+    if not plugin or not plugin.dirname then
+        return
+    end
+    self:showPluginFilesDialog(plugin, true)
+end
+
+function AppStore:showPluginFilesDialog(plugin, filter_config_only)
+    local plugin_path = PLUGINS_ROOT .. "/" .. plugin.dirname
+    if lfs.attributes(plugin_path, "mode") ~= "directory" then
+        UIManager:show(InfoMessage:new{
+            text = _("Plugin directory not found."),
+            timeout = 3,
+        })
+        return
+    end
+
+    -- Collect all .lua files recursively
+    local all_files = {}
+    local function scan_dir(dir, prefix)
+        if lfs.attributes(dir, "mode") ~= "directory" then return end
+        for entry in lfs.dir(dir) do
+            if entry ~= "." and entry ~= ".." then
+                local full = dir .. "/" .. entry
+                local rel  = (prefix == "") and entry or (prefix .. "/" .. entry)
+                local mode = lfs.attributes(full, "mode")
+                if mode == "directory" then
+                    scan_dir(full, rel)
+                elseif mode == "file" and entry:match("%.lua$") then
+                    table.insert(all_files, { path = full, name = entry, rel = rel })
+                end
+            end
+        end
+    end
+    scan_dir(plugin_path, "")
+    table.sort(all_files, function(a, b) return a.rel < b.rel end)
+
+    -- Apply filter
+    local filtered = {}
+    if filter_config_only then
+        for _, f in ipairs(all_files) do
+            if f.name:lower():find("config", 1, true) then
+                table.insert(filtered, f)
+            end
+        end
+    else
+        filtered = all_files
+    end
+
+    local dialog
+    local buttons = {}
+
+    -- Toggle filter checkbox row
+    local filter_label = filter_config_only
+        and ("\xE2\x98\x91 " .. _("Config files only"))
+        or  ("\xE2\x98\x90 " .. _("Config files only"))
+    table.insert(buttons, {
+        {
+            text = filter_label,
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                self:showPluginFilesDialog(plugin, not filter_config_only)
+            end,
+        },
+    })
+
+    if #filtered == 0 then
+        local msg = filter_config_only
+            and _("No config files found — uncheck filter to show all files")
+            or  _("No Lua files found in plugin directory")
+        table.insert(buttons, {
+            {
+                text = msg,
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function() end,
+            },
+        })
+    else
+        for _, f in ipairs(filtered) do
+            local file = f  -- upvalue capture
+            table.insert(buttons, {
+                {
+                    text = file.rel,
+                    background = Blitbuffer.COLOR_WHITE,
+                    callback = function()
+                        UIManager:close(dialog)
+                        self:showPluginFileActionDialog(plugin, file.path, file.name, filter_config_only)
+                    end,
+                },
+            })
+        end
+    end
+
+    table.insert(buttons, {
+        {
+            text = _("Close"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+            end,
+        },
+    })
+
+    dialog = ButtonDialog:new{
+        title = string.format(_("Modify Plugin: %s"), plugin.name or plugin.dirname),
+        title_align = "center",
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+function AppStore:showPluginFileActionDialog(plugin, filepath, filename, filter_config_only)
+    local dialog
+    local buttons = {}
+
+    -- Edit
+    table.insert(buttons, {
+        {
+            text = _("Edit"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                local PluginLoader = require("pluginloader")
+                local te = PluginLoader:getPluginInstance("texteditor")
+                if te and te.checkEditFile then
+                    te:checkEditFile(filepath)
+                else
+                    UIManager:show(InfoMessage:new{
+                        text = _("Text editor plugin is not available."),
+                        timeout = 4,
+                    })
+                end
+            end,
+        },
+    })
+
+    -- Copy
+    table.insert(buttons, {
+        {
+            text = _("Copy"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                local copy_dialog
+                copy_dialog = InputDialog:new{
+                    title = _("Copy file as"),
+                    input = filename,
+                    input_hint = _("New filename"),
+                    buttons = {
+                        {
+                            {
+                                text = _("Cancel"),
+                                callback = function()
+                                    UIManager:close(copy_dialog)
+                                end,
+                            },
+                            {
+                                text = _("Copy"),
+                                is_enter_default = true,
+                                callback = function()
+                                    local new_name = util.trim(copy_dialog:getInputText() or "")
+                                    if new_name == "" then
+                                        UIManager:show(InfoMessage:new{
+                                            text = _("Filename cannot be empty."),
+                                            timeout = 3,
+                                        })
+                                        return
+                                    end
+                                    local dir = filepath:match("^(.*)[\\/]")
+                                    local new_path = dir .. "/" .. new_name
+                                    local src = io.open(filepath, "rb")
+                                    if not src then
+                                        UIManager:show(InfoMessage:new{
+                                            text = _("Cannot read source file."),
+                                            timeout = 3,
+                                        })
+                                        UIManager:close(copy_dialog)
+                                        return
+                                    end
+                                    local content = src:read("*all")
+                                    src:close()
+                                    local dst = io.open(new_path, "wb")
+                                    if not dst then
+                                        UIManager:show(InfoMessage:new{
+                                            text = _("Cannot write destination file."),
+                                            timeout = 3,
+                                        })
+                                        UIManager:close(copy_dialog)
+                                        return
+                                    end
+                                    dst:write(content)
+                                    dst:close()
+                                    UIManager:close(copy_dialog)
+                                    UIManager:show(InfoMessage:new{
+                                        text = string.format(_("Copied to '%s'."), new_name),
+                                        timeout = 3,
+                                    })
+                                    self:showPluginFilesDialog(plugin, filter_config_only)
+                                end,
+                            },
+                        },
+                    },
+                }
+                UIManager:show(copy_dialog)
+                copy_dialog:onShowKeyboard()
+            end,
+        },
+    })
+
+    -- Rename
+    table.insert(buttons, {
+        {
+            text = _("Rename"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                local rename_dialog
+                rename_dialog = InputDialog:new{
+                    title = _("Rename file"),
+                    input = filename,
+                    input_hint = _("New filename"),
+                    buttons = {
+                        {
+                            {
+                                text = _("Cancel"),
+                                callback = function()
+                                    UIManager:close(rename_dialog)
+                                end,
+                            },
+                            {
+                                text = _("Rename"),
+                                is_enter_default = true,
+                                callback = function()
+                                    local new_name = util.trim(rename_dialog:getInputText() or "")
+                                    if new_name == "" then
+                                        UIManager:show(InfoMessage:new{
+                                            text = _("Filename cannot be empty."),
+                                            timeout = 3,
+                                        })
+                                        return
+                                    end
+                                    local dir = filepath:match("^(.*)[\\/]")
+                                    local new_path = dir .. "/" .. new_name
+                                    local ok, err = os.rename(filepath, new_path)
+                                    if not ok then
+                                        UIManager:show(InfoMessage:new{
+                                            text = string.format(_("Rename failed: %s"), tostring(err)),
+                                            timeout = 4,
+                                        })
+                                    else
+                                        UIManager:close(rename_dialog)
+                                        UIManager:show(InfoMessage:new{
+                                            text = string.format(_("Renamed to '%s'."), new_name),
+                                            timeout = 3,
+                                        })
+                                        self:showPluginFilesDialog(plugin, filter_config_only)
+                                    end
+                                end,
+                            },
+                        },
+                    },
+                }
+                UIManager:show(rename_dialog)
+                rename_dialog:onShowKeyboard()
+            end,
+        },
+    })
+
+    -- Delete
+    table.insert(buttons, {
+        {
+            text = _("Delete"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                UIManager:show(ConfirmBox:new{
+                    text = string.format(_("Delete file '%s'?\n\nThis cannot be undone."), filename),
+                    ok_text = _("Delete"),
+                    cancel_text = _("Cancel"),
+                    ok_callback = function()
+                        local ok, err = os.remove(filepath)
+                        if ok then
+                            UIManager:show(InfoMessage:new{
+                                text = string.format(_("Deleted '%s'."), filename),
+                                timeout = 3,
+                            })
+                            self:showPluginFilesDialog(plugin, filter_config_only)
+                        else
+                            UIManager:show(InfoMessage:new{
+                                text = string.format(_("Failed to delete: %s"), tostring(err)),
+                                timeout = 4,
+                            })
+                        end
+                    end,
+                })
+            end,
+        },
+    })
+
+    table.insert(buttons, {
+        {
+            text = _("Close"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+            end,
+        },
+    })
+
+    dialog = ButtonDialog:new{
+        title = filename,
+        title_align = "center",
+        buttons = buttons,
+    }
+    UIManager:show(dialog)
+end
+
+-- ─── End Modify Plugin ────────────────────────────────────────────────────────
 
 function AppStore:disablePlugin(dirname)
     if not dirname or dirname == "" then
