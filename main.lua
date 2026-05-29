@@ -4517,7 +4517,16 @@ local function getReleaseLabel(release)
 end
 
 local function buildDownloadOptionsTitle(release)
-    local label = getReleaseLabel(release)
+    local tag = release and release.tag_name and release.tag_name ~= "" and release.tag_name or nil
+    local title = release and release.name and release.name ~= "" and release.name or nil
+    local has_distinct_title = title and tag
+        and title:lower():gsub("^%s*(.-)%s*$", "%1") ~= tag:lower():gsub("^%s*(.-)%s*$", "%1")
+    local label
+    if has_distinct_title then
+        label = string.format("%s \xE2\x80\x94 %s", title, tag)
+    else
+        label = getReleaseLabel(release)
+    end
     if not label then
         return _("Download options")
     end
@@ -4764,7 +4773,17 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release, f
     local last = math.min(first + RELEASES_PAGE_SIZE - 1, total)
     for i = first, last do
         local release = visible_releases[i]
-        local label = getReleaseLabel(release) or _("Unnamed release")
+        local tag = release.tag_name and release.tag_name ~= "" and release.tag_name or nil
+        local title = release.name and release.name ~= "" and release.name or nil
+        -- Show "Title — tag" when title exists and differs from tag (case-insensitive trim)
+        local has_distinct_title = title and tag
+            and title:lower():gsub("^%s*(.-)%s*$", "%1") ~= tag:lower():gsub("^%s*(.-)%s*$", "%1")
+        local label
+        if has_distinct_title then
+            label = string.format("%s \xE2\x80\x94 %s", title, tag)  -- "Title — tag"
+        else
+            label = getReleaseLabel(release) or _("Unnamed release")
+        end
         local date = formatReleaseDate(release)
         local prefix = ""
         if current_tag and getReleaseLabel(release) == current_tag then
