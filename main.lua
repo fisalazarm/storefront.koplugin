@@ -4606,7 +4606,6 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
             table.insert(buttons, {
                 text = _("View release notes"),
                 callback = function()
-                    UIManager:close(dialog)
                     local notes_dialog = ConfirmBox:new{
                         text = _("Release notes"),
                         cancel_text = _("Close"),
@@ -4646,6 +4645,7 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
             text = buildDownloadOptionsTitle(release),
             cancel_text = _("Cancel"),
             no_ok_button = true,
+            keep_dialog_open = true,
             other_buttons = button_rows,
         }
         UIManager:show(dialog)
@@ -4687,15 +4687,42 @@ function AppStore:showReleaseListDialog(repo, current_release)
             return
         end
 
-        self:renderReleaseListPage(repo, releases, 1, current_release)
+        self:renderReleaseListPage(repo, releases, 1, current_release, true)
     end)
 end
 
 local RELEASES_PAGE_SIZE = 10
 
-function AppStore:renderReleaseListPage(repo, releases, page, current_release)
+local function isPreRelease(release)
+    if release.prerelease then return true end
+    local tag = (release.tag_name or release.name or ""):lower()
+    -- Check common pre-release suffixes in version tags (e.g. v1.2.3-rc1, v1.0.0-beta.2)
+    if tag:find("[%-.]alpha") or tag:find("[%-.]beta")
+        or tag:find("[%-.]rc%d") or tag:find("[%-.]rc$") or tag:find("[%-.]rc%-")
+        or tag:find("[%-.]pre%d") or tag:find("[%-.]preview") or tag:find("%-pre%-")
+        or tag:find("[%-.]dev%d") or tag:find("[%-.]dev$")
+        or tag:find("nightly") then
+        return true
+    end
+    return false
+end
+
+function AppStore:renderReleaseListPage(repo, releases, page, current_release, filter_pre_releases)
+    if filter_pre_releases == nil then filter_pre_releases = true end
     page = page or 1
-    local total = #releases
+
+    -- Apply pre-release filter, keeping the original list for toggling
+    local visible_releases = releases
+    if filter_pre_releases then
+        visible_releases = {}
+        for _, r in ipairs(releases) do
+            if not isPreRelease(r) then
+                table.insert(visible_releases, r)
+            end
+        end
+    end
+
+    local total = #visible_releases
     local total_pages = math.max(1, math.ceil(total / RELEASES_PAGE_SIZE))
     if page < 1 then page = 1 end
     if page > total_pages then page = total_pages end
@@ -4704,10 +4731,39 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release)
 
     local dialog
     local button_rows = {}
+
+    -- Filter toggle checkbox row (always first)
+    local filter_label = filter_pre_releases
+        and ("\xE2\x98\x91 " .. _("Filter pre-releases"))
+        or  ("\xE2\x98\x90 " .. _("Filter pre-releases"))
+    table.insert(button_rows, {
+        {
+            text = filter_label,
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(dialog)
+                self:renderReleaseListPage(repo, releases, 1, current_release, not filter_pre_releases)
+            end,
+        },
+    })
+
+    if total == 0 then
+        local msg = filter_pre_releases
+            and _("No stable releases found — uncheck filter to show all releases")
+            or  _("No releases found for this repository.")
+        table.insert(button_rows, {
+            {
+                text = msg,
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function() end,
+            },
+        })
+    else
+
     local first = (page - 1) * RELEASES_PAGE_SIZE + 1
     local last = math.min(first + RELEASES_PAGE_SIZE - 1, total)
     for i = first, last do
-        local release = releases[i]
+        local release = visible_releases[i]
         local label = getReleaseLabel(release) or _("Unnamed release")
         local date = formatReleaseDate(release)
         local prefix = ""
@@ -4747,7 +4803,7 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release)
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
                     UIManager:close(dialog)
-                    self:renderReleaseListPage(repo, releases, page - 1, current_release)
+                    self:renderReleaseListPage(repo, releases, page - 1, current_release, filter_pre_releases)
                 end,
             })
         end
@@ -4762,12 +4818,14 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release)
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
                     UIManager:close(dialog)
-                    self:renderReleaseListPage(repo, releases, page + 1, current_release)
+                    self:renderReleaseListPage(repo, releases, page + 1, current_release, filter_pre_releases)
                 end,
             })
         end
         table.insert(button_rows, nav_row)
     end
+
+    end -- end else (total > 0)
 
     table.insert(button_rows, {
         {
