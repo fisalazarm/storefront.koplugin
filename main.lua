@@ -550,7 +550,7 @@ getPatchRecordsMap = function()
     return records
 end
 
-local function buildPatchRecordFields(filename, repo, patch_info)
+local function buildPatchRecordFields(filename, repo, patch_info, include_sha)
     if not filename or filename == "" or not repo then
         return nil
     end
@@ -566,7 +566,9 @@ local function buildPatchRecordFields(filename, repo, patch_info)
         branch = (patch_info and patch_info.branch) or getRepoDefaultBranch(repo),
         path = patch_info and patch_info.path,
         download_url = patch_info and patch_info.download_url,
-        sha = patch_info and patch_info.sha,
+        -- Only include SHA when explicitly requested (during install/update).
+        -- During match, leave it nil so fallback mechanism can detect old files.
+        sha = include_sha and (patch_info and patch_info.sha) or nil,
         matched_at = os.time(),
     }
     return record
@@ -2427,7 +2429,18 @@ function AppStore:promptUpdateAction(plugin, record)
             background = Blitbuffer.COLOR_WHITE,
             callback = function()
                 UIManager:close(info_box)
+                -- Clear repo info but preserve installed_version for future re-matching
+                local existing = InstallStore.get(plugin.dirname)
+                local preserved_version = existing and existing.installed_version
                 InstallStore.remove(plugin.dirname)
+                if preserved_version then
+                    -- Store minimal record with just dirname and version
+                    InstallStore.upsert(plugin.dirname, {
+                        dirname = plugin.dirname,
+                        plugin_name = plugin.name,
+                        installed_version = preserved_version,
+                    })
+                end
                 UIManager:show(InfoMessage:new{
                     text = string.format(_("Unlinked %s from repository."), plugin.name or plugin.dirname),
                     timeout = 3,
@@ -2573,7 +2586,17 @@ function AppStore:promptPatchUpdateAction(patch_item)
             background = Blitbuffer.COLOR_WHITE,
             callback = function()
                 UIManager:close(info_box)
+                -- Clear repo info but preserve SHA so it can be used when re-matching
+                local existing = InstallStore.getPatch(patch.filename)
+                local preserved_sha = existing and existing.sha
                 InstallStore.removePatch(patch.filename)
+                if preserved_sha then
+                    -- Store minimal record with just filename and SHA
+                    InstallStore.upsertPatch(patch.filename, {
+                        filename = patch.filename,
+                        sha = preserved_sha,
+                    })
+                end
                 UIManager:show(InfoMessage:new{
                     text = string.format(_("Unlinked %s from repository."), patch.filename),
                     timeout = 3,
@@ -3368,7 +3391,11 @@ function AppStore:matchPatchWithRepo(patch, repo, patch_entry)
     local from_patch_updates = self.match_context
         and self.match_context.kind == "patch"
         and self.match_context.from_patch_updates
-    local record = buildPatchRecordFields(patch.filename, repo, patch_entry)
+    -- Don't include SHA during match (include_sha=false). If the patch was previously
+    -- installed, the existing SHA will be preserved. If not, it stays nil and the
+    -- fallback mechanism (line 606-609) will compare remote_sha against local_sha,
+    -- correctly detecting updates for manually installed old files.
+    local record = buildPatchRecordFields(patch.filename, repo, patch_entry, false)
     if not record then
         UIManager:show(InfoMessage:new{ text = _("Unable to store match for patch."), timeout = 4 })
         return
@@ -3578,7 +3605,9 @@ function AppStore:rememberPatchInstall(filename, repo, patch_info)
     if not filename or filename == "" then
         return
     end
-    local record = buildPatchRecordFields(filename, repo, patch_info)
+    -- Include SHA during install/update (include_sha=true) so we can track the
+    -- installed version and detect future updates correctly.
+    local record = buildPatchRecordFields(filename, repo, patch_info, true)
     if record then
         InstallStore.upsertPatch(filename, record)
         return record

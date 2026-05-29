@@ -89,6 +89,12 @@ function InstallStore.upsertPatch(filename, record)
         return false
     end
     local data = readStore()
+    local existing = data.patches[filename]
+    -- Preserve existing SHA if new record doesn't have one (e.g., during match operation).
+    -- This ensures install SHA is not lost when matching an already-installed patch.
+    if existing and existing.sha and not record.sha then
+        record.sha = existing.sha
+    end
     data.patches[filename] = record
     return writeStore(data)
 end
