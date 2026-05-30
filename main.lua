@@ -951,7 +951,7 @@ local function getRepoDefaultBranch(repo)
         or "HEAD"
 end
 
-local function buildInstallRecordFields(dirname, plugin_name, installed_version, repo, meta_path)
+local function buildInstallRecordFields(dirname, plugin_name, installed_version, repo, meta_path, installed_tag)
     if not dirname or dirname == "" then
         return nil
     end
@@ -961,6 +961,7 @@ local function buildInstallRecordFields(dirname, plugin_name, installed_version,
         dirname = dirname,
         plugin_name = plugin_name,
         installed_version = installed_version,
+        installed_tag = installed_tag or nil,
         owner = owner,
         repo = repo_name,
         repo_full_name = repo and (repo.full_name or (owner and repo_name and (owner .. "/" .. repo_name))) or nil,
@@ -3660,7 +3661,8 @@ function AppStore:rememberInstall(info, repo)
         info.plugin_name,
         info.plugin_version,
         repo,
-        meta_path
+        meta_path,
+        info.plugin_release_tag
     )
     if record then
         InstallStore.upsert(info.plugin_dirname, record)
@@ -4578,8 +4580,10 @@ end
 
 -- Show a scrollable dialog with all release notes between the installed
 -- version and `target_release`, fetched from the GitHub releases list.
+-- `installed_tag` is the exact GitHub release tag of the installed version;
+-- when present it is used as the range boundary directly (no version parsing).
 -- Only shown when the target release is strictly newer than what is installed.
-function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_release)
+function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_release, installed_tag)
     NetworkMgr:runWhenOnline(function()
         local progress = InfoMessage:new{ text = _("Fetching changelog…"), timeout = 0 }
         UIManager:show(progress)
@@ -4598,28 +4602,42 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
             return
         end
 
-        -- GitHub returns releases newest-first.
-        -- Collect every release that is strictly newer than `installed_version`,
-        -- starting from `target_release` and walking downwards.
-        -- Also track `base_tag`: the first release that is NOT newer (i.e. the
-        -- currently installed one), used for the commit-compare button.
-        local target_tag  = target_release and target_release.tag_name
-        local sections    = {}
-        local base_tag    = nil
-        local collecting  = (target_tag == nil) -- no specific target → include everything newer
+        local target_tag = target_release and target_release.tag_name
+        local sections   = {}
+        -- `base_tag` is the known installed release tag used for commit-compare.
+        -- Prefer the recorded installed_tag; fall back to version-based detection.
+        local base_tag   = installed_tag or nil
+        local collecting = (target_tag == nil)
+        local is_downgrade = false
 
         for _, rel in ipairs(releases) do
             local rel_tag = rel.tag_name
-            -- Start collecting once we reach the target release tag.
+
+            -- Downgrade detection: if we hit the installed tag before the
+            -- target tag the user is going backwards.
+            if installed_tag and not collecting and rel_tag == installed_tag then
+                is_downgrade = true
+                break
+            end
+
+            -- Start collecting at the target release tag.
             if not collecting and rel_tag == target_tag then
                 collecting = true
             end
+
             if collecting then
-                -- Stop once we reach a version that is no longer newer than installed.
-                local rel_version = parseVersionFromTag(rel_tag)
-                if rel_version and not isVersionNewer(rel_version, installed_version) then
-                    base_tag = rel_tag  -- this is the installed version's release tag
+                -- Stop when we reach the installed tag (exact match).
+                if installed_tag and rel_tag == installed_tag then
                     break
+                end
+
+                -- Fallback stop: version-string comparison when no installed_tag.
+                if not installed_tag then
+                    local rel_version = parseVersionFromTag(rel_tag)
+                    if rel_version and not isVersionNewer(rel_version, installed_version) then
+                        base_tag = rel_tag
+                        break
+                    end
                 end
 
                 local label  = getReleaseLabel(rel) or rel_tag or _("Release")
@@ -4637,8 +4655,7 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
             end
         end
 
-        -- Fallback: construct a likely tag from the installed version string
-        -- (e.g. "1.2.0" → "v1.2.0") in case the releases list was truncated.
+        -- Fallback base_tag from version string when not found in releases list.
         if not base_tag and installed_version then
             base_tag = "v" .. installed_version
         end
@@ -4649,13 +4666,23 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
             reversed[#reversed + 1] = sections[i]
         end
 
-        local text
-        if #sections == 0 then
-            text = string.format(
-                _("No changelog entries found between %s and %s."),
-                installed_version or _("installed version"),
-                target_tag        or _("latest")
+        local downgrade_notice = ""
+        if is_downgrade then
+            downgrade_notice = string.format(
+                "\xE2\x9A\xA0 %s\n\n",
+                _("Warning: the selected version is older than what is currently installed. You are downgrading.")
             )
+        end
+
+        local text
+        if is_downgrade or #sections == 0 then
+            local repo_name = repo_desc.full_name or repo_desc.name or owner
+            text = string.format(
+                _("Changelog for %s\n%s \xE2\x86\x92 %s"),
+                repo_name,
+                installed_version or _("?"),
+                target_tag        or _("latest")
+            ) .. "\n\n" .. downgrade_notice .. _("No changelog entries found for this range.")
         else
             local repo_name = repo_desc.full_name or repo_desc.name or owner
             text = string.format(
@@ -4670,12 +4697,17 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
         local buttons_table = nil
         if base_tag and target_tag then
             local self_ref = self
+            local b_label = is_downgrade
+                and string.format(_("View commits (%s \xE2\x86\x92 %s)"), target_tag, base_tag)
+                or  string.format(_("View commits (%s \xE2\x86\x92 %s)"), base_tag, target_tag)
+            local b_base = is_downgrade and target_tag or base_tag
+            local b_head = is_downgrade and base_tag  or target_tag
             buttons_table = {
                 {
                     {
-                        text = string.format(_("View commits (%s \xE2\x86\x92 %s)"), base_tag, target_tag),
+                        text = b_label,
                         callback = function()
-                            self_ref:showCommitCompare(owner, repo_desc, base_tag, target_tag)
+                            self_ref:showCommitCompare(owner, repo_desc, b_base, b_head)
                         end,
                     },
                 },
@@ -4806,15 +4838,19 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
         -- We search install records to find a match even when not in update mode.
         do
             local installed_ver = nil
+            local installed_tag = nil
             local ctx_plugin = self.pending_install_context and self.pending_install_context.plugin
             if ctx_plugin then
                 installed_ver = ctx_plugin.version
+                local ctx_rec = InstallStore.get(ctx_plugin.dirname)
+                installed_tag = ctx_rec and ctx_rec.installed_tag
             else
                 local all_records = InstallStore.list()
                 for dirname, rec in pairs(all_records) do
                     if type(rec) == "table" and rec.owner == owner and rec.repo == repo.name then
                         local p = findInstalledPlugin(dirname)
                         installed_ver = (p and p.version) or rec.installed_version
+                        installed_tag = rec.installed_tag
                         break
                     end
                 end
@@ -4826,7 +4862,7 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
                     text = _("Full changelog"),
                     callback = function()
                         UIManager:close(dialog)
-                        self:showFullChangelog(owner, repo, installed_ver, release)
+                        self:showFullChangelog(owner, repo, installed_ver, release, installed_tag)
                     end,
                 })
             end
@@ -5115,6 +5151,11 @@ function AppStore:installPluginFromReleaseAsset(repo, release, asset)
             util.removeFile(zip_path)
             UIManager:show(InfoMessage:new{ text = detect_err or _("Could not detect plugin inside archive."), timeout = 6 })
             return
+        end
+
+        -- Store the release tag so it gets persisted in the install record.
+        if release and release.tag_name and release.tag_name ~= "" then
+            info.plugin_release_tag = release.tag_name
         end
 
         if self.pending_install_context and self.pending_install_context.mode == "update" then
