@@ -56,6 +56,7 @@ local AppStoreSettings = LuaSettings:open(SETTINGS_PATH)
 
 local ALLOW_DELETE_UNLINKED_PLUGINS_KEY = "allow_delete_unlinked_plugins"
 local ALLOW_DELETE_UNLINKED_PATCHES_KEY = "allow_delete_unlinked_patches"
+local IGNORED_RELEASES_KEY = "ignored_releases"
 
 local STALE_WARNING_SECONDS = 7 * 24 * 3600
 local BROWSER_PAGE_SIZE = 14
@@ -98,6 +99,51 @@ local function showRestartConfirmation(message)
         cancel_text = _("Restart later"),
         background = Blitbuffer.COLOR_WHITE,
     })
+end
+
+local function getIgnoredReleases()
+    return AppStoreSettings:readSetting(IGNORED_RELEASES_KEY) or {}
+end
+
+local function saveIgnoredReleases(ignored_releases)
+    AppStoreSettings:saveSetting(IGNORED_RELEASES_KEY, ignored_releases)
+    AppStoreSettings:flush()
+end
+
+local function ignoreRelease(owner, repo_name, version)
+    if not owner or not repo_name or not version then
+        return
+    end
+    local key = string.format("%s/%s", owner, repo_name)
+    local ignored = getIgnoredReleases()
+    ignored[key] = version
+    saveIgnoredReleases(ignored)
+end
+
+local function clearIgnoredRelease(owner, repo_name)
+    if not owner or not repo_name then
+        return
+    end
+    local key = string.format("%s/%s", owner, repo_name)
+    local ignored = getIgnoredReleases()
+    if ignored[key] then
+        ignored[key] = nil
+        saveIgnoredReleases(ignored)
+    end
+end
+
+local function getIgnoredVersion(owner, repo_name)
+    if not owner or not repo_name then
+        return nil
+    end
+    local key = string.format("%s/%s", owner, repo_name)
+    local ignored = getIgnoredReleases()
+    return ignored[key]
+end
+
+local function isReleaseIgnored(owner, repo_name, version)
+    local ignored_version = getIgnoredVersion(owner, repo_name)
+    return ignored_version == version
 end
 
 local AppStoreListItem = InputContainer:extend{
@@ -1169,6 +1215,17 @@ function AppStore:collectUpdateSummary()
                     end
                 else
                     has_update = release_ts > local_latest_ts
+                end
+                
+                if has_update and record.owner and record.repo then
+                    if isReleaseIgnored(record.owner, record.repo, release_tag) then
+                        has_update = false
+                    else
+                        local ignored_version = getIgnoredVersion(record.owner, record.repo)
+                        if ignored_version and ignored_version ~= release_tag then
+                            clearIgnoredRelease(record.owner, record.repo)
+                        end
+                    end
                 end
             else
                 local remote_version = remote.remote_version
@@ -2434,6 +2491,12 @@ function AppStore:promptUpdateAction(plugin, record)
                 -- Clear repo info but preserve installed_version for future re-matching
                 local existing = InstallStore.get(plugin.dirname)
                 local preserved_version = existing and existing.installed_version
+                
+                -- Clear ignored release for this repo
+                if record.owner and record.repo then
+                    clearIgnoredRelease(record.owner, record.repo)
+                end
+                
                 InstallStore.remove(plugin.dirname)
                 if preserved_version then
                     -- Store minimal record with just dirname and version
@@ -3666,6 +3729,15 @@ function AppStore:rememberInstall(info, repo)
     )
     if record then
         InstallStore.upsert(info.plugin_dirname, record)
+        
+        -- Clear ignored release if user installed the ignored version
+        if repo and repo.owner and repo.name and info.plugin_release_tag then
+            local owner = repo.owner
+            local repo_name = repo.name
+            if isReleaseIgnored(owner, repo_name, info.plugin_release_tag) then
+                clearIgnoredRelease(owner, repo_name)
+            end
+        end
     end
 end
 
@@ -4723,7 +4795,7 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
     end)
 end
 
-local function buildDownloadOptionsTitle(release)
+local function buildDownloadOptionsTitle(release, owner, repo_name)
     local tag = release and release.tag_name and release.tag_name ~= "" and release.tag_name or nil
     local title = release and release.name and release.name ~= "" and release.name or nil
     local has_distinct_title = title and tag
@@ -4738,10 +4810,18 @@ local function buildDownloadOptionsTitle(release)
         return _("Download options")
     end
     local date = formatReleaseDate(release)
+    local result
     if date then
-        return string.format(_("Download options — %s (%s)"), label, date)
+        result = string.format(_("Download options — %s (%s)"), label, date)
+    else
+        result = string.format(_("Download options — %s"), label)
     end
-    return string.format(_("Download options — %s"), label)
+    
+    if owner and repo_name and tag and isReleaseIgnored(owner, repo_name, tag) then
+        result = result .. " " .. _("[Ignored]")
+    end
+    
+    return result
 end
 
 function AppStore:promptPluginInstallOptions(repo, release_override)
@@ -4868,6 +4948,44 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
             end
         end
 
+        -- Add "Ignore This Release" button only when showing the latest release
+        -- (not when user manually selected a different release), when it's
+        -- an update (newer than installed version), and when it's not already ignored.
+        if release and release.tag_name and not release_override then
+            local ctx_plugin = self.pending_install_context and self.pending_install_context.plugin
+            local installed_ver = nil
+            if ctx_plugin then
+                installed_ver = ctx_plugin.version
+            else
+                local all_records = InstallStore.list()
+                for dirname, rec in pairs(all_records) do
+                    if type(rec) == "table" and rec.owner == owner and rec.repo == repo.name then
+                        local p = findInstalledPlugin(dirname)
+                        installed_ver = (p and p.version) or rec.installed_version
+                        break
+                    end
+                end
+            end
+            
+            local release_ver = parseVersionFromTag(release.tag_name)
+            local is_update = installed_ver and release_ver and isVersionNewer(release_ver, installed_ver)
+            local is_ignored = isReleaseIgnored(owner, repo.name, release.tag_name)
+            
+            if is_update and not is_ignored then
+                table.insert(buttons, {
+                    text = _("Ignore this release"),
+                    callback = function()
+                        ignoreRelease(owner, repo.name, release.tag_name)
+                        UIManager:close(dialog)
+                        UIManager:show(InfoMessage:new{
+                            text = string.format(_("Release %s will be ignored until a newer version is available."), release.tag_name),
+                            timeout = 3,
+                        })
+                    end,
+                })
+            end
+        end
+
         -- Always offer a way to switch to a different release; the release
         -- list itself handles the case where no releases are available.
         table.insert(buttons, {
@@ -4893,7 +5011,7 @@ function AppStore:promptPluginInstallOptions(repo, release_override)
         end
 
         dialog = ConfirmBox:new{
-            text = buildDownloadOptionsTitle(release),
+            text = buildDownloadOptionsTitle(release, owner, repo.name),
             cancel_text = _("Cancel"),
             no_ok_button = true,
             keep_dialog_open = true,
@@ -5041,6 +5159,11 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release, f
             text = text .. " " .. _("[pre]")
         elseif release.draft then
             text = text .. " " .. _("[draft]")
+        end
+        
+        local owner = repo.owner or (repo.data and repo.data.owner and repo.data.owner.login)
+        if owner and repo.name and tag and isReleaseIgnored(owner, repo.name, tag) then
+            text = text .. " " .. _("[Ignored]")
         end
         table.insert(button_rows, {
             {
