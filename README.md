@@ -19,6 +19,7 @@ Discover, install, and update community-created KOReader plugins and user patche
 - **Per-entry README viewer** that fetches `README.md` directly from GitHub and opens it in KOReader’s document renderer.
 - **Install/update pipeline** that handles `.koplugin` archives, verifies metadata, and copies files to `data/plugins` or `data/patches` accordingly.
 - **Update tracking** for installed plugins and numbered patch files, complete with SHA comparisons and refreshable summaries.
+- **Ignore release** feature to temporarily hide specific plugin updates until a newer version is available.
 - **Optional authentication** through a GitHub Personal Access Token (PAT) to increase API rate limits.
 
 ## Requirements
@@ -118,6 +119,19 @@ Link installed plugins/patches with GitHub repositories to enable update trackin
 - **Match from List**: Opens the repository browser with automatic filtering by plugin/patch name for quick matching.
 - **Match with URL**: Manually enter GitHub owner and repository name to link items not found in search results.
 - **Unlink the repo**: Remove repository association from linked items to return them to unlinked state.
+
+### Ignore Release
+
+Temporarily hide specific plugin updates from the update notifications:
+
+- **How it works**: When you ignore a release (e.g., v1.8.2), it won't appear in "Check Updates" or "Check All Updates" lists until a newer version is released.
+- **Ignore a release**: Open the Download Options dialog for the latest release and tap **Ignore this release**.
+- **Visual indicators**: Ignored releases are marked with `[Ignored]` in both the Download Options title and the release list.
+- **Automatic cleanup**: The ignore status is automatically cleared when:
+  - A newer version is released
+  - You install the ignored version
+  - You unlink the repository
+- **Manual access**: You can still see and install ignored releases by tapping **Update plugin** → **Other releases…** from the plugin's action menu.
 
 ### Accessing Management Options
 
