@@ -64,12 +64,17 @@ local STALE_WARNING_SECONDS = 7 * 24 * 3600
 local DEFAULT_BROWSER_PAGE_SIZE = 14
 local MIN_BROWSER_PAGE_SIZE = 4
 local MAX_BROWSER_PAGE_SIZE = 100
+-- Installed/manage lists hold taller multi-line entries (name + version +
+-- update status), so they get their own page-size setting, defaulting smaller
+-- than the compact available-browser list.
+local DEFAULT_MANAGE_PAGE_SIZE = 7
 local PLUGIN_TOPICS = { "koreader-plugin" }
 local PATCH_TOPICS = { "koreader-user-patch" }
 local PLUGIN_NAME_QUERIES = { 'in:name ".koplugin"' }
 local PATCH_NAME_QUERIES = { 'in:name "KOReader.patches"' }
 local BROWSER_STATE_KEY = "browser_state"
 local BROWSER_PAGE_SIZE_KEY = "browser_page_size"
+local MANAGE_PAGE_SIZE_KEY = "manage_page_size"
 local INCLUDE_ZERO_STAR_FORKS_KEY = "include_zero_star_forks"
 local PATCH_CACHE_TTL = 10 * 60
 local DEFAULT_SORT_MODE = "stars_desc"
@@ -100,6 +105,14 @@ local function getBrowserPageSize()
         return math.min(math.floor(v), MAX_BROWSER_PAGE_SIZE)
     end
     return DEFAULT_BROWSER_PAGE_SIZE
+end
+
+local function getManagePageSize()
+    local v = AppStoreSettings:readSetting(MANAGE_PAGE_SIZE_KEY)
+    if type(v) == "number" and v >= MIN_BROWSER_PAGE_SIZE then
+        return math.min(math.floor(v), MAX_BROWSER_PAGE_SIZE)
+    end
+    return DEFAULT_MANAGE_PAGE_SIZE
 end
 
 local function showRestartConfirmation(message)
@@ -1152,6 +1165,7 @@ function AppStore:ensureUpdatesState()
     self.updates_state.filter_only_outdated = self.updates_state.filter_only_outdated or false
     self.updates_state.filter_only_linked = self.updates_state.filter_only_linked or false
     self.updates_state.remote_info = self.updates_state.remote_info or {}
+    self.updates_state.page = self.updates_state.page or 1
 end
 
 function AppStore:ensurePatchUpdatesState()
@@ -1161,6 +1175,7 @@ function AppStore:ensurePatchUpdatesState()
     self.patch_updates_state.filter_only_outdated = self.patch_updates_state.filter_only_outdated or false
     self.patch_updates_state.filter_only_linked = self.patch_updates_state.filter_only_linked or false
     self.patch_updates_state.remote_info = self.patch_updates_state.remote_info or {}
+    self.patch_updates_state.page = self.patch_updates_state.page or 1
 end
 
 function AppStore:collectPatchUpdateSummary()
@@ -1452,13 +1467,27 @@ function AppStore:buildUpdateBrowserItems(summary)
     }
     items[#items].separator = true
 
+    -- Paginate the installed-plugin entries the same way the browser paginates
+    -- its available list. Without this the whole list (dozens of multi-line
+    -- widgets) lives on one page, so every cursor move triggers a full-dialog
+    -- repaint that takes tens of seconds on e-ink. The informational header
+    -- items above are kept on every page (cheap single-line widgets).
     local plugin_items = self:buildUpdateItems(summary)
-    for _, entry in ipairs(plugin_items) do
-        items[#items + 1] = entry
+    local page_size = getManagePageSize()
+    local display_total = #plugin_items
+    local total_pages = math.max(1, math.ceil(display_total / page_size))
+    local page = math.min(math.max(self.updates_state.page or 1, 1), total_pages)
+    if self.updates_state.page ~= page then
+        self.updates_state.page = page
+    end
+    local start_index = (page - 1) * page_size + 1
+    local end_index = math.min(display_total, start_index + page_size - 1)
+    for i = start_index, end_index do
+        items[#items + 1] = plugin_items[i]
         items[#items].separator = true
     end
 
-    return items
+    return items, total_pages
 end
 
 function AppStore:buildPatchUpdateBrowserItems(summary)
@@ -1509,13 +1538,23 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     }
     items[#items].separator = true
 
+    -- Paginate installed-patch entries (see buildUpdateBrowserItems for why).
     local patch_items = self:buildPatchUpdateItems(summary)
-    for _, entry in ipairs(patch_items) do
-        items[#items + 1] = entry
+    local page_size = getManagePageSize()
+    local display_total = #patch_items
+    local total_pages = math.max(1, math.ceil(display_total / page_size))
+    local page = math.min(math.max(self.patch_updates_state.page or 1, 1), total_pages)
+    if self.patch_updates_state.page ~= page then
+        self.patch_updates_state.page = page
+    end
+    local start_index = (page - 1) * page_size + 1
+    local end_index = math.min(display_total, start_index + page_size - 1)
+    for i = start_index, end_index do
+        items[#items + 1] = patch_items[i]
         items[#items].separator = true
     end
 
-    return items
+    return items, total_pages
 end
 
 function AppStore:updateUpdatesDialog()
@@ -1526,6 +1565,21 @@ function AppStore:updateUpdatesDialog()
         self:ensureUpdatesState()
         self.updates_state.scroll_offset = self.updates_menu:getScrollOffset()
     end
+    self:closeUpdatesDialog(true)
+    self:showUpdatesDialog()
+end
+
+-- Flip the installed-plugins dialog to another page: reset scroll to the top
+-- (do not save the current offset) and rebuild. The builder clamps the page to
+-- the valid range, so out-of-range requests settle on the nearest edge.
+function AppStore:gotoUpdatesPage(page_num)
+    self:ensureUpdatesState()
+    local target = math.max(1, page_num or 1)
+    if target == self.updates_state.page then
+        return
+    end
+    self.updates_state.page = target
+    self.updates_state.scroll_offset = nil
     self:closeUpdatesDialog(true)
     self:showUpdatesDialog()
 end
@@ -1578,6 +1632,31 @@ function AppStore:showPluginUpdatesSettings()
         },
         {
             {
+                text = string.format(_("Items per page: %d"), getManagePageSize()),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(button_dialog)
+                    UIManager:show(SpinWidget:new{
+                        title_text = _("Items per page"),
+                        value = getManagePageSize(),
+                        value_min = MIN_BROWSER_PAGE_SIZE,
+                        value_max = MAX_BROWSER_PAGE_SIZE,
+                        ok_text = _("Set"),
+                        callback = function(spin)
+                            AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
+                            AppStoreSettings:flush()
+                            self:ensureUpdatesState()
+                            self.updates_state.page = 1
+                            self.updates_state.scroll_offset = nil
+                            self:closeUpdatesDialog(true)
+                            self:showUpdatesDialog()
+                        end,
+                    })
+                end,
+            },
+        },
+        {
+            {
                 text = _("Close"),
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
@@ -1586,7 +1665,7 @@ function AppStore:showPluginUpdatesSettings()
             },
         },
     }
-     
+
     button_dialog = ButtonDialog:new{
         title = _("Installed Plugins Settings"),
         buttons = buttons,
@@ -1597,16 +1676,21 @@ end
 function AppStore:showUpdatesDialog()
     self:ensureUpdatesState()
     local summary = self:collectUpdateSummary()
-    local entries = self:buildUpdateBrowserItems(summary)
+    local entries, total_pages = self:buildUpdateBrowserItems(summary)
     local dialog = AppStoreBrowserDialog:new{
         title = _("App Store · Installed plugins"),
         items = entries,
         appstore = self,
-        page = 1,
-        total_pages = 1,
+        page = self.updates_state.page or 1,
+        total_pages = total_pages,
         on_settings_tap = function()
             self:showPluginUpdatesSettings()
         end,
+        on_first_page = function() self:gotoUpdatesPage(1) end,
+        on_prev_page = function() self:gotoUpdatesPage((self.updates_state.page or 1) - 1) end,
+        on_next_page = function() self:gotoUpdatesPage((self.updates_state.page or 1) + 1) end,
+        on_last_page = function() self:gotoUpdatesPage(total_pages) end,
+        on_goto_page = function(page_num) self:gotoUpdatesPage(page_num) end,
         on_dismiss = function(scroll_offset)
             self.updates_menu = nil
             self:ensureUpdatesState()
@@ -1646,6 +1730,31 @@ function AppStore:showPatchUpdatesSettings()
         },
         {
             {
+                text = string.format(_("Items per page: %d"), getManagePageSize()),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(button_dialog)
+                    UIManager:show(SpinWidget:new{
+                        title_text = _("Items per page"),
+                        value = getManagePageSize(),
+                        value_min = MIN_BROWSER_PAGE_SIZE,
+                        value_max = MAX_BROWSER_PAGE_SIZE,
+                        ok_text = _("Set"),
+                        callback = function(spin)
+                            AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
+                            AppStoreSettings:flush()
+                            self:ensurePatchUpdatesState()
+                            self.patch_updates_state.page = 1
+                            self.patch_updates_state.scroll_offset = nil
+                            self:closePatchUpdatesDialog(true)
+                            self:showPatchUpdatesDialog()
+                        end,
+                    })
+                end,
+            },
+        },
+        {
+            {
                 text = _("Close"),
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
@@ -1654,7 +1763,7 @@ function AppStore:showPatchUpdatesSettings()
             },
         },
     }
-    
+
     button_dialog = ButtonDialog:new{
         title = _("Installed Patches Settings"),
         buttons = buttons,
@@ -1671,16 +1780,21 @@ function AppStore:showPatchUpdatesDialog()
     self.patch_updates_state.scroll_offset = prev_scroll
     self:closePatchUpdatesDialog(true)
     local summary = self:collectPatchUpdateSummary()
-    local entries = self:buildPatchUpdateBrowserItems(summary)
+    local entries, total_pages = self:buildPatchUpdateBrowserItems(summary)
     local dialog = AppStoreBrowserDialog:new{
         title = _("App Store · Installed patches"),
         items = entries,
         appstore = self,
-        page = 1,
-        total_pages = 1,
+        page = self.patch_updates_state.page or 1,
+        total_pages = total_pages,
         on_settings_tap = function()
             self:showPatchUpdatesSettings()
         end,
+        on_first_page = function() self:gotoPatchUpdatesPage(1) end,
+        on_prev_page = function() self:gotoPatchUpdatesPage((self.patch_updates_state.page or 1) - 1) end,
+        on_next_page = function() self:gotoPatchUpdatesPage((self.patch_updates_state.page or 1) + 1) end,
+        on_last_page = function() self:gotoPatchUpdatesPage(total_pages) end,
+        on_goto_page = function(page_num) self:gotoPatchUpdatesPage(page_num) end,
         on_dismiss = function(scroll_offset)
             self.patch_updates_menu = nil
             self:ensurePatchUpdatesState()
@@ -1702,6 +1816,18 @@ function AppStore:updatePatchUpdatesDialog()
         self:ensurePatchUpdatesState()
         self.patch_updates_state.scroll_offset = self.patch_updates_menu:getScrollOffset()
     end
+    self:closePatchUpdatesDialog(true)
+    self:showPatchUpdatesDialog()
+end
+
+function AppStore:gotoPatchUpdatesPage(page_num)
+    self:ensurePatchUpdatesState()
+    local target = math.max(1, page_num or 1)
+    if target == self.patch_updates_state.page then
+        return
+    end
+    self.patch_updates_state.page = target
+    self.patch_updates_state.scroll_offset = nil
     self:closePatchUpdatesDialog(true)
     self:showPatchUpdatesDialog()
 end
