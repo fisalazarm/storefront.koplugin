@@ -4505,6 +4505,12 @@ function AppStoreBrowserDialog:init()
             list_group[#list_group + 1] = item_widget
             if item_widget:isFocusable() then
                 self._focusable_items[#self._focusable_items + 1] = item_widget
+                -- Remember the focusable index of the row the caller asked to keep
+                -- focused across this rebuild (e.g. the Sort row while cycling sort
+                -- modes), so focus does not jump back to the top each press.
+                if self.initial_focus_id and entry.focus_id == self.initial_focus_id then
+                    self._initial_focus_item_index = #self._focusable_items
+                end
             end
             if show_progress and idx % progress_step == 0 then
                 Trapper:info(string.format(_("Building list… %d / %d"), idx, total_items), false, true)
@@ -4709,7 +4715,9 @@ function AppStoreBrowserDialog:init()
     -- back to whatever the first valid layout row exposes. We use
     -- FOCUS_ONLY_ON_NT so that touch users do not see an unsolicited focus
     -- highlight on first paint, while D-pad users get visible focus.
-    if #self._focusable_items > 0 then
+    if self._initial_focus_item_index then
+        self.selected = { x = 1, y = first_list_row_index + self._initial_focus_item_index - 1 }
+    elseif #self._focusable_items > 0 then
         self.selected = { x = 1, y = first_list_row_index }
     elseif #self.layout > 0 then
         self.selected = { x = 1, y = 1 }
@@ -6152,6 +6160,9 @@ function AppStore:advanceSortMode()
     self.browser_state.page = 1
     self.browser_state.scroll_offset = nil
     self:saveBrowserState()
+    -- Keep focus on the Sort row after the rebuild so repeated presses cycle
+    -- through the sort modes in place.
+    self.browser_focus_id = "sort"
     self:reopenBrowser()
 end
 
@@ -6837,6 +6848,9 @@ function AppStore:buildBrowserEntries()
     table.insert(items, {
         text = self:getSortSummary(),
         keep_menu_open = true,
+        -- Keep focus on this row across the rebuild so the sort mode can be
+        -- cycled by pressing repeatedly without the cursor jumping to the top.
+        focus_id = "sort",
         callback = function()
             self:browserAdvanceSort()
         end,
@@ -7065,12 +7079,17 @@ function AppStore:showBrowser(kind)
     local Trapper = require("ui/trapper")
     Trapper:wrap(function()
     local items, total_pages = self:buildBrowserEntries()
+    -- One-shot: a caller (e.g. cycling sort) may ask to keep focus on a specific
+    -- row across this rebuild. Consume it so later rebuilds focus normally.
+    local initial_focus_id = self.browser_focus_id
+    self.browser_focus_id = nil
     local dialog = AppStoreBrowserDialog:new{
         title = title,
         items = items,
         page = self.browser_state.page,
         total_pages = total_pages,
         scroll_offset = self.browser_state.scroll_offset,
+        initial_focus_id = initial_focus_id,
         on_settings_tap = function()
             self:showAppStoreSettingsDialog()
         end,
