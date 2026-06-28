@@ -4661,6 +4661,7 @@ function AppStoreBrowserDialog:init()
     if self.toolbar_buttons and #self.toolbar_buttons > 0 then
         local tb = HorizontalGroup:new{}
         self._toolbar_widgets = {}
+        self._toolbar_ids = {}
         for i, spec in ipairs(self.toolbar_buttons) do
             if i > 1 then
                 table.insert(tb, HorizontalSpan:new{ width = Size.span.horizontal_default })
@@ -4674,6 +4675,7 @@ function AppStoreBrowserDialog:init()
             }
             table.insert(tb, btn)
             self._toolbar_widgets[#self._toolbar_widgets + 1] = btn
+            self._toolbar_ids[#self._toolbar_ids + 1] = { id = spec.id }
         end
         self.toolbar = tb
         toolbar_height = tb:getSize().h + Size.span.vertical_default
@@ -4770,6 +4772,7 @@ function AppStoreBrowserDialog:init()
     -- Toolbar action buttons form one multi-column focus row, above the list.
     if self._toolbar_widgets and #self._toolbar_widgets > 0 then
         table.insert(self.layout, self._toolbar_widgets)
+        self._toolbar_row_index = #self.layout
     end
     local first_list_row_index = #self.layout + 1
     self._first_list_row_index = first_list_row_index
@@ -4862,6 +4865,12 @@ function AppStoreBrowserDialog:_resolveInitialFocus(first_list_row_index)
             return { x = 1, y = first_list_row_index + self._last_entry_index - 1 }
         elseif f.id and self._focus_target_index then
             return { x = 1, y = first_list_row_index + self._focus_target_index - 1 }
+        elseif f.toolbar and self._toolbar_row_index and self._toolbar_ids then
+            for col, b in ipairs(self._toolbar_ids) do
+                if b.id == f.toolbar then
+                    return { x = col, y = self._toolbar_row_index }
+                end
+            end
         elseif f.footer then
             local sel = self:_resolveFooterFocus(f.footer, f.direction, first_list_row_index)
             if sel then return sel end
@@ -4906,6 +4915,10 @@ end
 function AppStoreBrowserDialog:getFocusContext()
     local sel = self.selected
     if not sel then return { kind = "other" } end
+    if self._toolbar_row_index and sel.y == self._toolbar_row_index then
+        local b = self._toolbar_ids and self._toolbar_ids[sel.x]
+        return { kind = "toolbar", which = b and b.id or nil }
+    end
     if self._footer_row_index and sel.y == self._footer_row_index then
         local b = self._footer_buttons and self._footer_buttons[sel.x]
         return { kind = "footer", which = b and b.id or nil }
@@ -7113,6 +7126,8 @@ function AppStore:computePageFlipFocus(dialog, forward)
         return { entry = forward and "first" or "last" }
     elseif ctx.kind == "control" and ctx.focus_id then
         return { id = ctx.focus_id }
+    elseif ctx.kind == "toolbar" and ctx.which then
+        return { toolbar = ctx.which }
     elseif ctx.kind == "footer" and ctx.which then
         return { footer = ctx.which, direction = forward and "forward" or "backward" }
     end
@@ -7250,9 +7265,9 @@ function AppStore:showBrowser(kind)
     -- Compact toolbar: short fixed-label actions, kept out of the list body.
     local other_tab = self.browser_state.kind == "plugin" and _("Patches") or _("Plugins")
     local toolbar_buttons = {
-        { text = "↔ " .. other_tab, callback = function() self:browserSwitchTab() end },
-        { text = _("Refresh"), callback = function() self:browserRefresh() end },
-        { text = _("Installed"), callback = function() self:browserManageInstalled() end },
+        { id = "switch", text = "↔ " .. other_tab, callback = function() self:browserSwitchTab() end },
+        { id = "refresh", text = _("Refresh"), callback = function() self:browserRefresh() end },
+        { id = "manage", text = _("Installed"), callback = function() self:browserManageInstalled() end },
     }
     local dialog = AppStoreBrowserDialog:new{
         title = title,
