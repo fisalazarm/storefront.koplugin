@@ -6729,17 +6729,33 @@ function AppStore:buildBrowserEntries()
         end
     end
 
-    -- Action items (switch tab / refresh / manage / filter / sort) live in the
-    -- gear menu (Menu key, gear icon, r/f/s/t hotkeys), not in the list body, so
-    -- they stay reachable from any scroll position. The list body holds only the
-    -- current filter/sort summary (informational) and the entries themselves.
+    -- Frequent actions (switch tab / filter / sort) are tappable rows at the top
+    -- of the list, mirroring the installed-plugins/patches manager so navigation
+    -- is consistent across every screen. They are also bound to the gear menu
+    -- (gear icon / Menu key) and the r/f/s/t hotkeys, which is the no-scroll path
+    -- for non-touch devices; the in-list rows are the one-tap path for touch.
+    -- Less frequent actions (refresh / manage installed) stay in the gear menu.
+    table.insert(items, {
+        text = kind == "plugin" and "↔ " .. _("Switch to patches tab")
+            or "↔ " .. _("Switch to plugins tab"),
+        callback = function()
+            self:browserSwitchTab()
+        end,
+    })
+    items[#items].separator = true
     table.insert(items, {
         text = self:getFilterSummary(),
-        select_enabled = false,
+        keep_menu_open = true,
+        callback = function()
+            self:browserOpenFilter()
+        end,
     })
     table.insert(items, {
         text = self:getSortSummary(),
-        select_enabled = false,
+        keep_menu_open = true,
+        callback = function()
+            self:browserAdvanceSort()
+        end,
     })
     items[#items].separator = true
 
