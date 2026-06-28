@@ -4666,10 +4666,11 @@ function AppStoreBrowserDialog:init()
             if i > 1 then
                 table.insert(tb, HorizontalSpan:new{ width = Size.span.horizontal_default })
             end
+            -- Real button look (border + rounded corners), not a borderless menu
+            -- row, so the toolbar reads as tappable buttons rather than a heading.
             local btn = Button:new{
                 text = spec.text,
-                menu_style = true,
-                bordersize = 0,
+                radius = Size.radius.button,
                 background = Blitbuffer.COLOR_WHITE,
                 callback = spec.callback,
             }
