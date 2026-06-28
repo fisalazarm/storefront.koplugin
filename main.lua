@@ -737,6 +737,7 @@ function AppStore:buildPatchUpdateItems(summary)
             local entry = {
                 text = table.concat(lines, "\n"),
                 dim = not patch_item.needs_update,
+                is_entry = true,
                 keep_menu_open = true,
             }
             entry.callback = function()
@@ -1399,6 +1400,7 @@ function AppStore:buildUpdateItems(summary)
             local entry = {
                 text = text,
                 dim = not item.has_update,
+                is_entry = true,
                 keep_menu_open = true,
             }
             entry.callback = function()
@@ -1427,6 +1429,7 @@ function AppStore:buildUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = "⮤ " .. _("Switch to plugin list"),
         keep_menu_open = true,
+        focus_id = "switch_list",
         callback = function()
             self:closeUpdatesDialog(true)
             self:showBrowser("plugin")
@@ -1437,6 +1440,7 @@ function AppStore:buildUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = "↔ " .. _("Switch to installed patches"),
         keep_menu_open = true,
+        focus_id = "switch_installed",
         callback = function()
             self:closeUpdatesDialog(true)
             self:showPatchUpdatesDialog()
@@ -1447,6 +1451,7 @@ function AppStore:buildUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = _("Check all updates"),
         keep_menu_open = true,
+        focus_id = "check_all",
         callback = function()
             self:checkAllUpdates()
         end,
@@ -1465,6 +1470,7 @@ function AppStore:buildUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = _("Filter: ") .. current_filter,
         keep_menu_open = true,
+        focus_id = "filter",
         callback = function()
             self:showPluginFilterDialog()
         end,
@@ -1508,6 +1514,7 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     items[#items + 1] = {
         text ="⮤ " .. _("Switch to patch list"),
         keep_menu_open = true,
+        focus_id = "switch_list",
         callback = function()
             self:closePatchUpdatesDialog(true)
             self:showBrowser("patch")
@@ -1518,6 +1525,7 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = "↔ " .. _("Switch to installed plugins"),
         keep_menu_open = true,
+        focus_id = "switch_installed",
         callback = function()
             self:closePatchUpdatesDialog(true)
             self:showUpdatesDialog()
@@ -1528,6 +1536,7 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = _("Check all updates"),
         keep_menu_open = true,
+        focus_id = "check_all",
         callback = function()
             self:refreshPatchUpdates()
         end,
@@ -1546,6 +1555,7 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     items[#items + 1] = {
         text = _("Filter: ") .. current_filter,
         keep_menu_open = true,
+        focus_id = "filter",
         callback = function()
             self:showPatchFilterDialog()
         end,
@@ -1598,6 +1608,7 @@ function AppStore:gotoUpdatesPage(page_num)
     if target == self.updates_state.page then
         return
     end
+    self.updates_focus_hint = self:computePageFlipFocus(self.updates_menu, target > self.updates_state.page)
     self.updates_state.page = target
     self.updates_state.scroll_offset = nil
     -- Reset the live scroller to the top before closing: otherwise onCloseWidget's
@@ -1708,12 +1719,15 @@ function AppStore:showUpdatesDialog()
     self:ensureUpdatesState()
     local summary = self:collectUpdateSummary()
     local entries, total_pages = self:buildUpdateBrowserItems(summary)
+    local initial_focus = self.updates_focus_hint
+    self.updates_focus_hint = nil
     local dialog = AppStoreBrowserDialog:new{
         title = _("App Store · Installed plugins"),
         items = entries,
         appstore = self,
         page = self.updates_state.page or 1,
         total_pages = total_pages,
+        initial_focus = initial_focus,
         on_settings_tap = function()
             self:showPluginUpdatesSettings()
         end,
@@ -1823,12 +1837,15 @@ function AppStore:showPatchUpdatesDialog()
     self:closePatchUpdatesDialog(true)
     local summary = self:collectPatchUpdateSummary()
     local entries, total_pages = self:buildPatchUpdateBrowserItems(summary)
+    local initial_focus = self.patch_updates_focus_hint
+    self.patch_updates_focus_hint = nil
     local dialog = AppStoreBrowserDialog:new{
         title = _("App Store · Installed patches"),
         items = entries,
         appstore = self,
         page = self.patch_updates_state.page or 1,
         total_pages = total_pages,
+        initial_focus = initial_focus,
         on_settings_tap = function()
             self:showPatchUpdatesSettings()
         end,
@@ -1871,6 +1888,7 @@ function AppStore:gotoPatchUpdatesPage(page_num)
     if target == self.patch_updates_state.page then
         return
     end
+    self.patch_updates_focus_hint = self:computePageFlipFocus(self.patch_updates_menu, target > self.patch_updates_state.page)
     self.patch_updates_state.page = target
     self.patch_updates_state.scroll_offset = nil
     -- Reset the live scroller to the top before closing (see gotoUpdatesPage):
@@ -4525,11 +4543,19 @@ function AppStoreBrowserDialog:init()
             list_group[#list_group + 1] = item_widget
             if item_widget:isFocusable() then
                 self._focusable_items[#self._focusable_items + 1] = item_widget
-                -- Remember the focusable index of the row the caller asked to keep
-                -- focused across this rebuild (e.g. the Sort row while cycling sort
-                -- modes), so focus does not jump back to the top each press.
-                if self.initial_focus_id and entry.focus_id == self.initial_focus_id then
-                    self._initial_focus_item_index = #self._focusable_items
+                local fidx = #self._focusable_items
+                -- Track the first/last real list entries (books/plugins/patches) so
+                -- a page flip can land the cursor at the top/bottom of the new page.
+                if entry.is_entry then
+                    self._first_entry_index = self._first_entry_index or fidx
+                    self._last_entry_index = fidx
+                end
+                -- Track a control row the caller asked to keep focused across the
+                -- rebuild (e.g. the Sort row while cycling, or an action row that
+                -- was focused when a page flip happened).
+                if self.initial_focus and self.initial_focus.id
+                        and entry.focus_id == self.initial_focus.id then
+                    self._focus_target_index = fidx
                 end
             end
             if show_progress and idx % progress_step == 0 then
@@ -4712,36 +4738,34 @@ function AppStoreBrowserDialog:init()
         end
     end
     local first_list_row_index = #self.layout + 1
+    self._first_list_row_index = first_list_row_index
     for _, item_widget in ipairs(self._focusable_items) do
         table.insert(self.layout, { item_widget })
     end
     local footer_row = {}
+    local footer_ids = {}
     if self.page > 1 then
-        table.insert(footer_row, first_button)
-        table.insert(footer_row, prev_button)
+        table.insert(footer_row, first_button); table.insert(footer_ids, { id = "first" })
+        table.insert(footer_row, prev_button); table.insert(footer_ids, { id = "prev" })
     end
     if self.total_pages > 1 then
-        table.insert(footer_row, page_button)
+        table.insert(footer_row, page_button); table.insert(footer_ids, { id = "page" })
     end
     if self.page < self.total_pages then
-        table.insert(footer_row, next_button)
-        table.insert(footer_row, last_button)
+        table.insert(footer_row, next_button); table.insert(footer_ids, { id = "next" })
+        table.insert(footer_row, last_button); table.insert(footer_ids, { id = "last" })
     end
     if #footer_row > 0 then
         table.insert(self.layout, footer_row)
+        self._footer_row_index = #self.layout
+        self._footer_buttons = footer_ids
     end
 
-    -- Initial focus: prefer the first focusable list item; otherwise fall
-    -- back to whatever the first valid layout row exposes. We use
-    -- FOCUS_ONLY_ON_NT so that touch users do not see an unsolicited focus
-    -- highlight on first paint, while D-pad users get visible focus.
-    if self._initial_focus_item_index then
-        self.selected = { x = 1, y = first_list_row_index + self._initial_focus_item_index - 1 }
-    elseif #self._focusable_items > 0 then
-        self.selected = { x = 1, y = first_list_row_index }
-    elseif #self.layout > 0 then
-        self.selected = { x = 1, y = 1 }
-    end
+    -- Initial focus. A caller may pass self.initial_focus to keep the cursor in a
+    -- sensible place across a rebuild (page flip / sort cycle); otherwise default
+    -- to the first focusable list item. FOCUS_ONLY_ON_NT keeps touch UIs free of
+    -- an unsolicited highlight while giving D-pad users visible focus.
+    self.selected = self:_resolveInitialFocus(first_list_row_index)
 
     if self.scroll_offset then
         self:setScrollOffset(self.scroll_offset)
@@ -4788,6 +4812,79 @@ end
 function AppStoreBrowserDialog:onClose()
     UIManager:close(self)
     return true
+end
+
+-- Resolve where focus should land on (re)build. Honors self.initial_focus:
+--   { entry = "first"|"last" }    -> top/bottom real list entry
+--   { id = "<focus_id>" }         -> a specific control row (e.g. "sort")
+--   { footer = "<id>", direction} -> a footer page-control, with fallback
+-- Falls back to the first focusable list item.
+function AppStoreBrowserDialog:_resolveInitialFocus(first_list_row_index)
+    local f = self.initial_focus
+    if f then
+        if f.entry == "first" and self._first_entry_index then
+            return { x = 1, y = first_list_row_index + self._first_entry_index - 1 }
+        elseif f.entry == "last" and self._last_entry_index then
+            return { x = 1, y = first_list_row_index + self._last_entry_index - 1 }
+        elseif f.id and self._focus_target_index then
+            return { x = 1, y = first_list_row_index + self._focus_target_index - 1 }
+        elseif f.footer then
+            local sel = self:_resolveFooterFocus(f.footer, f.direction, first_list_row_index)
+            if sel then return sel end
+        end
+    end
+    if #self._focusable_items > 0 then
+        return { x = 1, y = first_list_row_index }
+    elseif #self.layout > 0 then
+        return { x = 1, y = 1 }
+    end
+    return nil
+end
+
+function AppStoreBrowserDialog:_footerColumnOf(id)
+    if not self._footer_buttons then return nil end
+    for col, b in ipairs(self._footer_buttons) do
+        if b.id == id then return col end
+    end
+    return nil
+end
+
+-- Keep focus on the footer page-control across a flip. If the same button is
+-- gone (reached the first/last page), fall back to the remaining page-controls,
+-- then to the edge list entry in the flip direction.
+function AppStoreBrowserDialog:_resolveFooterFocus(which, direction, first_list_row_index)
+    local order = direction == "backward"
+        and { which, "prev", "first", "page" }
+        or { which, "next", "last", "page" }
+    for _, id in ipairs(order) do
+        local col = self:_footerColumnOf(id)
+        if col then return { x = col, y = self._footer_row_index } end
+    end
+    if direction == "backward" and self._first_entry_index then
+        return { x = 1, y = first_list_row_index + self._first_entry_index - 1 }
+    elseif self._last_entry_index then
+        return { x = 1, y = first_list_row_index + self._last_entry_index - 1 }
+    end
+    return nil
+end
+
+-- Describe what is currently focused, so a page flip can preserve it.
+function AppStoreBrowserDialog:getFocusContext()
+    local sel = self.selected
+    if not sel then return { kind = "other" } end
+    if self._footer_row_index and sel.y == self._footer_row_index then
+        local b = self._footer_buttons and self._footer_buttons[sel.x]
+        return { kind = "footer", which = b and b.id or nil }
+    end
+    if self._first_list_row_index and sel.y >= self._first_list_row_index then
+        local item = self._focusable_items[sel.y - self._first_list_row_index + 1]
+        local entry = item and item.entry
+        if entry then
+            if entry.is_entry then return { kind = "entry" } end
+            if entry.focus_id then return { kind = "control", focus_id = entry.focus_id } end
+        end
+    end
+    return { kind = "other" }
 end
 
 -- Page-flip key handlers for non-touch / D-pad devices.
@@ -6182,7 +6279,7 @@ function AppStore:advanceSortMode()
     self:saveBrowserState()
     -- Keep focus on the Sort row after the rebuild so repeated presses cycle
     -- through the sort modes in place.
-    self.browser_focus_id = "sort"
+    self.browser_focus_hint = { id = "sort" }
     self:reopenBrowser()
 end
 
@@ -6776,6 +6873,7 @@ function AppStore:makeRepoMenuItem(repo, installed_lookup)
     return {
         text = formatRepoEntry(repo),
         installed = is_installed,
+        is_entry = true,
         keep_menu_open = true,
         callback = function()
             self:promptRepoAction(repo)
@@ -6801,6 +6899,7 @@ function AppStore:makePatchMenuItem(repo, patch)
     end
     return {
         text = table.concat(lines, "\n"),
+        is_entry = true,
         keep_menu_open = true,
         callback = function()
             self:promptPatchAction(repo, patch)
@@ -6853,6 +6952,7 @@ function AppStore:buildBrowserEntries()
     table.insert(items, {
         text = kind == "plugin" and "↔ " .. _("Switch to patches tab")
             or "↔ " .. _("Switch to plugins tab"),
+        focus_id = "switch",
         callback = function()
             self:browserSwitchTab()
         end,
@@ -6860,6 +6960,7 @@ function AppStore:buildBrowserEntries()
     items[#items].separator = true
     table.insert(items, {
         text = _("Refresh cache"),
+        focus_id = "refresh",
         callback = function()
             self:browserRefresh()
         end,
@@ -6868,6 +6969,7 @@ function AppStore:buildBrowserEntries()
     table.insert(items, {
         text = kind == "plugin" and _("Manage installed plugins")
             or _("Manage installed patches"),
+        focus_id = "manage",
         callback = function()
             self:browserManageInstalled()
         end,
@@ -6876,6 +6978,7 @@ function AppStore:buildBrowserEntries()
     table.insert(items, {
         text = self:getFilterSummary(),
         keep_menu_open = true,
+        focus_id = "filter",
         callback = function()
             self:browserOpenFilter()
         end,
@@ -6988,6 +7091,24 @@ function AppStore:resetBrowserScrollState()
         self.browser_menu:resetScroll()
     end
     self.skip_scroll_save = true
+end
+
+-- Given the live browser/manager dialog and a flip direction, return the focus
+-- hint for the rebuilt dialog so the cursor stays where the user expects:
+--   on a list entry  -> top entry when flipping forward, bottom when backward
+--   on a control row -> the same control row
+--   on a footer page-control -> the same footer control (with fallback)
+function AppStore:computePageFlipFocus(dialog, forward)
+    if not dialog or not dialog.getFocusContext then return nil end
+    local ctx = dialog:getFocusContext()
+    if ctx.kind == "entry" then
+        return { entry = forward and "first" or "last" }
+    elseif ctx.kind == "control" and ctx.focus_id then
+        return { id = ctx.focus_id }
+    elseif ctx.kind == "footer" and ctx.which then
+        return { footer = ctx.which, direction = forward and "forward" or "backward" }
+    end
+    return nil
 end
 
 function AppStore:reopenBrowser(kind)
@@ -7114,17 +7235,17 @@ function AppStore:showBrowser(kind)
     local Trapper = require("ui/trapper")
     Trapper:wrap(function()
     local items, total_pages = self:buildBrowserEntries()
-    -- One-shot: a caller (e.g. cycling sort) may ask to keep focus on a specific
-    -- row across this rebuild. Consume it so later rebuilds focus normally.
-    local initial_focus_id = self.browser_focus_id
-    self.browser_focus_id = nil
+    -- One-shot: a caller (sort cycle / page flip) may ask where focus should land
+    -- across this rebuild. Consume it so later rebuilds focus normally.
+    local initial_focus = self.browser_focus_hint
+    self.browser_focus_hint = nil
     local dialog = AppStoreBrowserDialog:new{
         title = title,
         items = items,
         page = self.browser_state.page,
         total_pages = total_pages,
         scroll_offset = self.browser_state.scroll_offset,
-        initial_focus_id = initial_focus_id,
+        initial_focus = initial_focus,
         on_settings_tap = function()
             self:showAppStoreSettingsDialog()
         end,
@@ -7135,6 +7256,7 @@ function AppStore:showBrowser(kind)
         on_first_page = function()
             if self.browser_state.page > 1 then
                 self:resetBrowserScrollState()
+                self.browser_focus_hint = self:computePageFlipFocus(self.browser_menu, false)
                 self.browser_state.page = 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
@@ -7144,6 +7266,7 @@ function AppStore:showBrowser(kind)
         on_prev_page = function()
             if self.browser_state.page > 1 then
                 self:resetBrowserScrollState()
+                self.browser_focus_hint = self:computePageFlipFocus(self.browser_menu, false)
                 self.browser_state.page = self.browser_state.page - 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
@@ -7154,6 +7277,7 @@ function AppStore:showBrowser(kind)
             local total_pages = self._last_total_kind == (self.browser_state.kind or "plugin") and (self._last_total_pages or 1) or 1
             if self.browser_state.page < total_pages then
                 self:resetBrowserScrollState()
+                self.browser_focus_hint = self:computePageFlipFocus(self.browser_menu, true)
                 self.browser_state.page = self.browser_state.page + 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
@@ -7164,6 +7288,7 @@ function AppStore:showBrowser(kind)
             local total_pages = self._last_total_kind == (self.browser_state.kind or "plugin") and (self._last_total_pages or 1) or 1
             if self.browser_state.page < total_pages then
                 self:resetBrowserScrollState()
+                self.browser_focus_hint = self:computePageFlipFocus(self.browser_menu, true)
                 self.browser_state.page = total_pages
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
@@ -7173,7 +7298,9 @@ function AppStore:showBrowser(kind)
         on_goto_page = function(page_num)
             local total_pages = self._last_total_kind == (self.browser_state.kind or "plugin") and (self._last_total_pages or 1) or 1
             if page_num >= 1 and page_num <= total_pages and page_num ~= self.browser_state.page then
+                local forward = page_num > self.browser_state.page
                 self:resetBrowserScrollState()
+                self.browser_focus_hint = self:computePageFlipFocus(self.browser_menu, forward)
                 self.browser_state.page = page_num
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
