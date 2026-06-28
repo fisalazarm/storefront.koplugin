@@ -1580,6 +1580,12 @@ function AppStore:gotoUpdatesPage(page_num)
     end
     self.updates_state.page = target
     self.updates_state.scroll_offset = nil
+    -- Reset the live scroller to the top before closing: otherwise onCloseWidget's
+    -- on_dismiss writes the current (old) offset back over the nil above, and the
+    -- new page would open scrolled down, hiding its first rows.
+    if self.updates_menu and self.updates_menu.resetScroll then
+        self.updates_menu:resetScroll()
+    end
     self:closeUpdatesDialog(true)
     self:showUpdatesDialog()
 end
@@ -1837,6 +1843,11 @@ function AppStore:gotoPatchUpdatesPage(page_num)
     end
     self.patch_updates_state.page = target
     self.patch_updates_state.scroll_offset = nil
+    -- Reset the live scroller to the top before closing (see gotoUpdatesPage):
+    -- otherwise on_dismiss writes the old offset back over the nil above.
+    if self.patch_updates_menu and self.patch_updates_menu.resetScroll then
+        self.patch_updates_menu:resetScroll()
+    end
     self:closePatchUpdatesDialog(true)
     self:showPatchUpdatesDialog()
 end
@@ -1871,6 +1882,9 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = false
                     self.updates_state.filter_only_linked = false
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.updates_state.page = 1
+                    self.updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -1885,6 +1899,9 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = true
                     self.updates_state.filter_only_linked = false
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.updates_state.page = 1
+                    self.updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -1899,6 +1916,9 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = false
                     self.updates_state.filter_only_linked = true
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.updates_state.page = 1
+                    self.updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -1961,6 +1981,9 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = false
                     self.patch_updates_state.filter_only_linked = false
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.patch_updates_state.page = 1
+                    self.patch_updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
@@ -1979,6 +2002,9 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = true
                     self.patch_updates_state.filter_only_linked = false
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.patch_updates_state.page = 1
+                    self.patch_updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
@@ -1997,6 +2023,9 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = false
                     self.patch_updates_state.filter_only_linked = true
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self.patch_updates_state.page = 1
+                    self.patch_updates_state.scroll_offset = nil
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
@@ -4079,9 +4108,13 @@ function AppStoreListItem:init()
     if entry.installed then
         local row_w = content_width - 2 * Size.padding.default
         local row_h = text_box:getSize().h
+        -- face.size is already DPI-scaled and Font:getFace() scales again, so the
+        -- 2x face is derived from the unscaled size (orig_size) to avoid scaling
+        -- twice, which would oversize the mark on high-DPI screens.
+        local base_size = face.orig_size or face.size or 18
         local check = TextWidget:new{
             text = "✓",
-            face = Font:getFace("smallinfofont", math.floor((face.size or 18) * 2)),
+            face = Font:getFace("smallinfofont", base_size * 2),
             fgcolor = text_color,
         }
         row_widget = OverlapGroup:new{
