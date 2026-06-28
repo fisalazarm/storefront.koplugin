@@ -4215,9 +4215,14 @@ function AppStoreListItem:init()
             },
         }
     end
+    -- Tappable control rows (Filter / Sort and the managers' action rows) get a
+    -- visible border so they read as controls rather than plain headings. Real
+    -- list entries and non-tappable info rows stay borderless.
+    local is_control = entry.callback and not entry.is_entry and entry.select_enabled ~= false
     self.frame = FrameContainer:new{
         padding = Size.padding.default,
-        bordersize = 0,
+        bordersize = is_control and Size.border.button or 0,
+        radius = is_control and Size.radius.button or nil,
         row_widget,
     }
     self[1] = self.frame
