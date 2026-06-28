@@ -1654,6 +1654,11 @@ function AppStore:showPluginUpdatesSettings()
                             self:ensureUpdatesState()
                             self.updates_state.page = 1
                             self.updates_state.scroll_offset = nil
+                            -- Reset the open scroller before closing, else
+                            -- on_dismiss saves the old offset back over the nil.
+                            if self.updates_menu and self.updates_menu.resetScroll then
+                                self.updates_menu:resetScroll()
+                            end
                             self:closeUpdatesDialog(true)
                             self:showUpdatesDialog()
                         end,
@@ -1758,6 +1763,11 @@ function AppStore:showPatchUpdatesSettings()
                             self:ensurePatchUpdatesState()
                             self.patch_updates_state.page = 1
                             self.patch_updates_state.scroll_offset = nil
+                            -- Reset the open scroller before closing, else
+                            -- on_dismiss saves the old offset back over the nil.
+                            if self.patch_updates_menu and self.patch_updates_menu.resetScroll then
+                                self.patch_updates_menu:resetScroll()
+                            end
                             self:closePatchUpdatesDialog(true)
                             self:showPatchUpdatesDialog()
                         end,
@@ -4127,9 +4137,26 @@ function AppStoreListItem:init()
     local face = Font:getFace("smallinfofont")
     local line_height_px = math.floor(face.size * 1.4)
     local max_height = line_height_px * 3
+    local content_inner = content_width - 2 * Size.padding.default
+    -- "Installed" mark: a large checkmark pinned to the right margin (normally
+    -- empty). Build it first so the text area can reserve room for it instead of
+    -- being drawn underneath it (long names would otherwise hide behind the ✓).
+    local check, mark_reserve
+    if entry.installed then
+        -- face.size is already DPI-scaled and Font:getFace() scales again, so the
+        -- 2x face is derived from the unscaled size (orig_size) to avoid scaling
+        -- twice, which would oversize the mark on high-DPI screens.
+        local base_size = face.orig_size or face.size or 18
+        check = TextWidget:new{
+            text = "✓",
+            face = Font:getFace("smallinfofont", base_size * 2),
+            fgcolor = text_color,
+        }
+        mark_reserve = check:getSize().w + Size.padding.default
+    end
     local text_box = TextBoxWidget:new{
         text = entry.text or "",
-        width = content_width - 2 * Size.padding.default,
+        width = content_inner - (mark_reserve or 0),
         face = face,
         fgcolor = text_color,
         alignment = "left",
@@ -4138,26 +4165,14 @@ function AppStoreListItem:init()
         height_overflow_show_ellipsis = true,
         height_adjust = true,
     }
-    -- "Installed" mark: a large checkmark in the right margin (normally empty),
-    -- overlaid on the row so it stays visible at a glance.
     local row_widget = text_box
-    if entry.installed then
-        local row_w = content_width - 2 * Size.padding.default
+    if check then
         local row_h = text_box:getSize().h
-        -- face.size is already DPI-scaled and Font:getFace() scales again, so the
-        -- 2x face is derived from the unscaled size (orig_size) to avoid scaling
-        -- twice, which would oversize the mark on high-DPI screens.
-        local base_size = face.orig_size or face.size or 18
-        local check = TextWidget:new{
-            text = "✓",
-            face = Font:getFace("smallinfofont", base_size * 2),
-            fgcolor = text_color,
-        }
         row_widget = OverlapGroup:new{
-            dimen = Geom:new{ w = row_w, h = row_h },
+            dimen = Geom:new{ w = content_inner, h = row_h },
             text_box,
             RightContainer:new{
-                dimen = Geom:new{ w = row_w, h = row_h },
+                dimen = Geom:new{ w = content_inner, h = row_h },
                 check,
             },
         }
@@ -6927,6 +6942,14 @@ function AppStore:resetBrowserScrollState()
 end
 
 function AppStore:reopenBrowser(kind)
+    -- Callers that change what the list shows (sort, filter, clear filters, page
+    -- size, page flips) set browser_state.scroll_offset = nil to request a fresh
+    -- top-of-page view. Honour it: reset the live scroller and suppress the
+    -- dismiss-time save, otherwise onCloseWidget's on_dismiss writes the old live
+    -- offset back over that nil and the rebuilt list reopens scrolled down.
+    if self.browser_state and self.browser_state.scroll_offset == nil then
+        self:resetBrowserScrollState()
+    end
     self:closeBrowserMenu()
     UIManager:nextTick(function()
         self:showBrowser(kind)
@@ -6945,6 +6968,9 @@ function AppStore:browserSwitchTab()
     self.browser_state.scroll_offset = nil
     self:resetFiltersForRefresh()
     self:saveBrowserState()
+    -- Reset the live scroller (and suppress the dismiss-time save) before closing,
+    -- so the other tab opens at the top instead of the previous tab's offset.
+    self:resetBrowserScrollState()
     self:closeBrowserMenu()
     self:showBrowser()
 end
@@ -7332,11 +7358,6 @@ function AppStore:showAppStoreSettingsDialog()
                         self.browser_state.page = 1
                         self.browser_state.scroll_offset = nil
                         self:saveBrowserState()
-                        -- Reset the live scroller (and suppress the dismiss-time
-                        -- save) before reopening, as the page-flip path does;
-                        -- otherwise on_dismiss writes the old offset back over the
-                        -- nil above and page 1 reopens scrolled down.
-                        self:resetBrowserScrollState()
                         self:reopenBrowser()
                     end,
                 })
