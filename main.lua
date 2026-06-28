@@ -1702,6 +1702,12 @@ function AppStore:showUpdatesDialog()
     if self.updates_state.scroll_offset then
         dialog:setScrollOffset(self.updates_state.scroll_offset)
     end
+    -- Force a full (flashing) e-ink refresh as the last paint action. This dialog
+    -- replaces another full-screen AppStore dialog (the browser, settings or a
+    -- page flip); on devices that default to partial refresh (e.g. Kobo) the old
+    -- frame ghosts through otherwise. Old Kindle controllers flash on every
+    -- update, so this is effectively a no-op there.
+    UIManager:setDirty(dialog, "full")
 end
 
 function AppStore:showPatchUpdatesSettings()
@@ -1806,6 +1812,9 @@ function AppStore:showPatchUpdatesDialog()
     if self.patch_updates_state.scroll_offset then
         dialog:setScrollOffset(self.patch_updates_state.scroll_offset)
     end
+    -- Full refresh so the previous dialog does not ghost through on
+    -- partial-refresh devices. See showUpdatesDialog for the rationale.
+    UIManager:setDirty(dialog, "full")
 end
 
 function AppStore:updatePatchUpdatesDialog()
@@ -7020,6 +7029,10 @@ function AppStore:showBrowser(kind)
     Trapper:reset()
     self.browser_menu = dialog
     UIManager:show(dialog)
+    -- Full refresh so a previous full-screen dialog (the other tab, the installed
+    -- manager or a previous page) does not ghost through on partial-refresh
+    -- devices. See showUpdatesDialog for the rationale.
+    UIManager:setDirty(dialog, "full")
     end)
 end
 
