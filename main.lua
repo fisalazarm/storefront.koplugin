@@ -4653,10 +4653,36 @@ function AppStoreBrowserDialog:init()
     }
     last_button:enableDisable(self.page < self.total_pages)
 
+    -- Optional compact action toolbar: short fixed-label actions (Switch /
+    -- Refresh / Manage) as a single centered button row, kept OUT of the
+    -- scrollable list so they don't eat ~3 rows of list space. State controls
+    -- (Filter / Sort) stay as full-width list rows since their text is variable.
+    local toolbar_height = 0
+    if self.toolbar_buttons and #self.toolbar_buttons > 0 then
+        local tb = HorizontalGroup:new{}
+        self._toolbar_widgets = {}
+        for i, spec in ipairs(self.toolbar_buttons) do
+            if i > 1 then
+                table.insert(tb, HorizontalSpan:new{ width = Size.span.horizontal_default })
+            end
+            local btn = Button:new{
+                text = spec.text,
+                menu_style = true,
+                bordersize = 0,
+                background = Blitbuffer.COLOR_WHITE,
+                callback = spec.callback,
+            }
+            table.insert(tb, btn)
+            self._toolbar_widgets[#self._toolbar_widgets + 1] = btn
+        end
+        self.toolbar = tb
+        toolbar_height = tb:getSize().h + Size.span.vertical_default
+    end
+
     local title_height = self.title_bar:getHeight()
     local footer_height = math.max(first_button:getSize().h, prev_button:getSize().h, page_button:getSize().h, next_button:getSize().h, last_button:getSize().h)
     local vertical_padding = 3 * Size.span.vertical_default
-    local body_height = self.screen_h - title_height - footer_height - vertical_padding
+    local body_height = self.screen_h - title_height - footer_height - toolbar_height - vertical_padding
     if body_height < math.floor(self.screen_h * 0.5) then
         body_height = math.floor(self.screen_h * 0.5)
     end
@@ -4689,10 +4715,14 @@ function AppStoreBrowserDialog:init()
     self.content = VerticalGroup:new{
         self.title_bar,
         VerticalSpan:new{ width = Size.span.vertical_default },
-        self.list_scroller,
-        VerticalSpan:new{ width = Size.span.vertical_default },
-        self.footer,
     }
+    if self.toolbar then
+        table.insert(self.content, self.toolbar)
+        table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
+    end
+    table.insert(self.content, self.list_scroller)
+    table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
+    table.insert(self.content, self.footer)
 
     self[1] = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
@@ -4736,6 +4766,10 @@ function AppStoreBrowserDialog:init()
         for _, row in ipairs(title_rows) do
             table.insert(self.layout, row)
         end
+    end
+    -- Toolbar action buttons form one multi-column focus row, above the list.
+    if self._toolbar_widgets and #self._toolbar_widgets > 0 then
+        table.insert(self.layout, self._toolbar_widgets)
     end
     local first_list_row_index = #self.layout + 1
     self._first_list_row_index = first_list_row_index
@@ -6943,38 +6977,12 @@ function AppStore:buildBrowserEntries()
         end
     end
 
-    -- Full set of on-page controls (switch tab / refresh / manage installed /
-    -- filter / sort) as tappable rows at the top of the list. These are the touch
-    -- path and also a visible indicator of the current tab / filter / sort state.
-    -- The same actions are mirrored in the gear menu (gear icon / Menu key) — the
-    -- discoverable one-tap path for non-touch devices, which avoids scrolling the
-    -- list to reach an action — and r/f/s/t are extra hotkeys on keyboard devices.
-    table.insert(items, {
-        text = kind == "plugin" and "↔ " .. _("Switch to patches tab")
-            or "↔ " .. _("Switch to plugins tab"),
-        focus_id = "switch",
-        callback = function()
-            self:browserSwitchTab()
-        end,
-    })
-    items[#items].separator = true
-    table.insert(items, {
-        text = _("Refresh cache"),
-        focus_id = "refresh",
-        callback = function()
-            self:browserRefresh()
-        end,
-    })
-    items[#items].separator = true
-    table.insert(items, {
-        text = kind == "plugin" and _("Manage installed plugins")
-            or _("Manage installed patches"),
-        focus_id = "manage",
-        callback = function()
-            self:browserManageInstalled()
-        end,
-    })
-    items[#items].separator = true
+    -- The short fixed-label actions (switch tab / refresh / manage installed)
+    -- live in the dialog's compact toolbar (built from toolbar_buttons), not in
+    -- the list body, to save vertical space. The variable-width state controls
+    -- (Filter / Sort) stay as full-width list rows: their text can be long and
+    -- doubles as a visible indicator of the current filter/sort. All of these are
+    -- also in the gear menu (Menu key) and the r/f/s/t hotkeys.
     table.insert(items, {
         text = self:getFilterSummary(),
         keep_menu_open = true,
@@ -7239,6 +7247,13 @@ function AppStore:showBrowser(kind)
     -- across this rebuild. Consume it so later rebuilds focus normally.
     local initial_focus = self.browser_focus_hint
     self.browser_focus_hint = nil
+    -- Compact toolbar: short fixed-label actions, kept out of the list body.
+    local other_tab = self.browser_state.kind == "plugin" and _("Patches") or _("Plugins")
+    local toolbar_buttons = {
+        { text = "↔ " .. other_tab, callback = function() self:browserSwitchTab() end },
+        { text = _("Refresh"), callback = function() self:browserRefresh() end },
+        { text = _("Installed"), callback = function() self:browserManageInstalled() end },
+    }
     local dialog = AppStoreBrowserDialog:new{
         title = title,
         items = items,
@@ -7246,6 +7261,7 @@ function AppStore:showBrowser(kind)
         total_pages = total_pages,
         scroll_offset = self.browser_state.scroll_offset,
         initial_focus = initial_focus,
+        toolbar_buttons = toolbar_buttons,
         on_settings_tap = function()
             self:showAppStoreSettingsDialog()
         end,
