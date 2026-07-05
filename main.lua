@@ -1179,6 +1179,20 @@ function AppStore:ensurePatchUpdatesState()
     self.patch_updates_state.page = self.patch_updates_state.page or 1
 end
 
+-- Reset a paginated dialog's state to "top of list" (page 1, no saved scroll
+-- offset) and reset its live scroller. Both steps are needed: otherwise the
+-- dialog's on_dismiss would write the current (old) live offset back over the
+-- nil just set here, and the rebuilt list would reopen scrolled past its
+-- first rows. Used whenever a filter/sort/page-size change invalidates the
+-- current view (see call sites in showPluginFilterDialog/showPatchFilterDialog).
+function AppStore:resetPageAndScroll(state, menu)
+    state.page = 1
+    state.scroll_offset = nil
+    if menu and menu.resetScroll then
+        menu:resetScroll()
+    end
+end
+
 function AppStore:collectPatchUpdateSummary()
     self:ensurePatchUpdatesState()
     return buildPatchSummary(self.patch_updates_state.remote_info)
@@ -1938,15 +1952,8 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = false
                     self.updates_state.filter_only_linked = false
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updateUpdatesDialog /
-                    -- on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.updates_state.page = 1
-                    self.updates_state.scroll_offset = nil
-                    if self.updates_menu and self.updates_menu.resetScroll then
-                        self.updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.updates_state, self.updates_menu)
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -1961,15 +1968,8 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = true
                     self.updates_state.filter_only_linked = false
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updateUpdatesDialog /
-                    -- on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.updates_state.page = 1
-                    self.updates_state.scroll_offset = nil
-                    if self.updates_menu and self.updates_menu.resetScroll then
-                        self.updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.updates_state, self.updates_menu)
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -1984,15 +1984,8 @@ function AppStore:showPluginFilterDialog()
                     UIManager:close(self.plugin_filter_dialog)
                     self.updates_state.filter_only_outdated = false
                     self.updates_state.filter_only_linked = true
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updateUpdatesDialog /
-                    -- on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.updates_state.page = 1
-                    self.updates_state.scroll_offset = nil
-                    if self.updates_menu and self.updates_menu.resetScroll then
-                        self.updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.updates_state, self.updates_menu)
                     UIManager:nextTick(function()
                         self:updateUpdatesDialog()
                     end)
@@ -2055,15 +2048,8 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = false
                     self.patch_updates_state.filter_only_linked = false
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updatePatchUpdatesDialog
-                    -- / on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.patch_updates_state.page = 1
-                    self.patch_updates_state.scroll_offset = nil
-                    if self.patch_updates_menu and self.patch_updates_menu.resetScroll then
-                        self.patch_updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.patch_updates_state, self.patch_updates_menu)
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
@@ -2082,15 +2068,8 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = true
                     self.patch_updates_state.filter_only_linked = false
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updatePatchUpdatesDialog
-                    -- / on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.patch_updates_state.page = 1
-                    self.patch_updates_state.scroll_offset = nil
-                    if self.patch_updates_menu and self.patch_updates_menu.resetScroll then
-                        self.patch_updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.patch_updates_state, self.patch_updates_menu)
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
@@ -2109,15 +2088,8 @@ function AppStore:showPatchFilterDialog()
                     UIManager:close(self.patch_filter_dialog)
                     self.patch_updates_state.filter_only_outdated = false
                     self.patch_updates_state.filter_only_linked = true
-                    -- A new filter changes the matching set, so restart at page 1
-                    -- and reset the open scroller; otherwise updatePatchUpdatesDialog
-                    -- / on_dismiss saves the old offset back and the rebuilt list
-                    -- reopens scrolled past its first rows.
-                    self.patch_updates_state.page = 1
-                    self.patch_updates_state.scroll_offset = nil
-                    if self.patch_updates_menu and self.patch_updates_menu.resetScroll then
-                        self.patch_updates_menu:resetScroll()
-                    end
+                    -- A new filter changes the matching set, so restart at page 1.
+                    self:resetPageAndScroll(self.patch_updates_state, self.patch_updates_menu)
                     UIManager:nextTick(function()
                         if self.patch_updates_menu then
                             self:updatePatchUpdatesDialog()
