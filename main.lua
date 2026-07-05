@@ -1632,6 +1632,10 @@ function AppStore:gotoUpdatesPage(page_num)
         self.updates_menu:resetScroll()
     end
     self:closeUpdatesDialog(true)
+    -- A page flip doesn't change the dialog's title or overall chrome, only the
+    -- list body, so it doesn't need the full flashing refresh that a genuine
+    -- dialog-identity change (open/switch-tab/filter) uses to avoid ghosting.
+    self._updates_refresh_mode_hint = "partial"
     self:showUpdatesDialog()
 end
 
@@ -1765,12 +1769,15 @@ function AppStore:showUpdatesDialog()
     if self.updates_state.scroll_offset then
         dialog:setScrollOffset(self.updates_state.scroll_offset)
     end
-    -- Force a full (flashing) e-ink refresh as the last paint action. This dialog
-    -- replaces another full-screen AppStore dialog (the browser, settings or a
-    -- page flip); on devices that default to partial refresh (e.g. Kobo) the old
-    -- frame ghosts through otherwise. Old Kindle controllers flash on every
-    -- update, so this is effectively a no-op there.
-    UIManager:setDirty(dialog, "full")
+    -- Full (flashing) e-ink refresh by default: this dialog usually replaces
+    -- another full-screen AppStore dialog (the browser, settings) and on devices
+    -- that default to partial refresh (e.g. Kobo) the old frame ghosts through
+    -- otherwise. Old Kindle controllers flash on every update, so this is
+    -- effectively a no-op there. gotoUpdatesPage narrows this to a lighter
+    -- "partial" refresh for plain page flips, where the title/chrome don't change.
+    local refresh_mode = self._updates_refresh_mode_hint or "full"
+    self._updates_refresh_mode_hint = nil
+    UIManager:setDirty(dialog, refresh_mode)
 end
 
 function AppStore:showPatchUpdatesSettings()
@@ -1887,9 +1894,12 @@ function AppStore:showPatchUpdatesDialog()
     if self.patch_updates_state.scroll_offset then
         dialog:setScrollOffset(self.patch_updates_state.scroll_offset)
     end
-    -- Full refresh so the previous dialog does not ghost through on
-    -- partial-refresh devices. See showUpdatesDialog for the rationale.
-    UIManager:setDirty(dialog, "full")
+    -- Full refresh by default so the previous dialog does not ghost through on
+    -- partial-refresh devices; narrowed to "partial" for plain page flips. See
+    -- showUpdatesDialog for the rationale.
+    local refresh_mode = self._patch_updates_refresh_mode_hint or "full"
+    self._patch_updates_refresh_mode_hint = nil
+    UIManager:setDirty(dialog, refresh_mode)
 end
 
 function AppStore:updatePatchUpdatesDialog()
@@ -1919,6 +1929,10 @@ function AppStore:gotoPatchUpdatesPage(page_num)
         self.patch_updates_menu:resetScroll()
     end
     self:closePatchUpdatesDialog(true)
+    -- See gotoUpdatesPage: a page flip doesn't change the dialog's title/chrome,
+    -- so it doesn't need the full flashing refresh used elsewhere to avoid
+    -- ghosting on a genuine dialog-identity change.
+    self._patch_updates_refresh_mode_hint = "partial"
     self:showPatchUpdatesDialog()
 end
 
@@ -7267,6 +7281,7 @@ function AppStore:showBrowser(kind)
                 self.browser_state.page = 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
+                self._browser_refresh_mode_hint = "partial"
                 self:reopenBrowser()
             end
         end,
@@ -7277,6 +7292,7 @@ function AppStore:showBrowser(kind)
                 self.browser_state.page = self.browser_state.page - 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
+                self._browser_refresh_mode_hint = "partial"
                 self:reopenBrowser()
             end
         end,
@@ -7288,6 +7304,7 @@ function AppStore:showBrowser(kind)
                 self.browser_state.page = self.browser_state.page + 1
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
+                self._browser_refresh_mode_hint = "partial"
                 self:reopenBrowser()
             end
         end,
@@ -7299,6 +7316,7 @@ function AppStore:showBrowser(kind)
                 self.browser_state.page = total_pages
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
+                self._browser_refresh_mode_hint = "partial"
                 self:reopenBrowser()
             end
         end,
@@ -7311,6 +7329,7 @@ function AppStore:showBrowser(kind)
                 self.browser_state.page = page_num
                 self.browser_state.scroll_offset = nil
                 self:saveBrowserState()
+                self._browser_refresh_mode_hint = "partial"
                 self:reopenBrowser()
             end
         end,
@@ -7334,10 +7353,13 @@ function AppStore:showBrowser(kind)
     end
     self.browser_menu = dialog
     UIManager:show(dialog)
-    -- Full refresh so a previous full-screen dialog (the other tab, the installed
-    -- manager or a previous page) does not ghost through on partial-refresh
-    -- devices. See showUpdatesDialog for the rationale.
-    UIManager:setDirty(dialog, "full")
+    -- Full refresh by default so a previous full-screen dialog (the other tab,
+    -- the installed manager) does not ghost through on partial-refresh devices;
+    -- narrowed to "partial" for plain page flips, which don't change the title/
+    -- chrome. See showUpdatesDialog for the rationale.
+    local refresh_mode = self._browser_refresh_mode_hint or "full"
+    self._browser_refresh_mode_hint = nil
+    UIManager:setDirty(dialog, refresh_mode)
     end)
 end
 
