@@ -963,6 +963,12 @@ local function isVersionNewer(v1_str, v2_str)
     if not v1_str or not v2_str then
         return false
     end
+    -- Strip a leading "v"/"V" so a _meta.lua version like "v1.4.2" compares
+    -- equal to a release tag parsed to "1.4.2" (parseVersionFromTag already
+    -- strips it on the tag side). Otherwise normalizeVersion turns the "v1"
+    -- segment into 0 and the local version always looks older.
+    v1_str = tostring(v1_str):gsub("^[vV]", "")
+    v2_str = tostring(v2_str):gsub("^[vV]", "")
     if v1_str == v2_str then
         return false
     end
@@ -4106,6 +4112,12 @@ local function isVersionNewer(v1_str, v2_str)
     if not v1_str or not v2_str then
         return false
     end
+    -- Strip a leading "v"/"V" so a _meta.lua version like "v1.4.2" compares
+    -- equal to a release tag parsed to "1.4.2" (parseVersionFromTag already
+    -- strips it on the tag side). Otherwise normalizeVersion turns the "v1"
+    -- segment into 0 and the local version always looks older.
+    v1_str = tostring(v1_str):gsub("^[vV]", "")
+    v2_str = tostring(v2_str):gsub("^[vV]", "")
     if v1_str == v2_str then
         return false
     end
