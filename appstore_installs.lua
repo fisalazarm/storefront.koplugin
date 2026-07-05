@@ -11,6 +11,10 @@ local settings = LuaSettings:open(SETTINGS_PATH)
 
 local store_key = "installs"
 
+-- Bumped on every successful write, so callers can cache derived data (e.g.
+-- an installed-repo lookup) and only rebuild it when records actually change.
+local generation = 0
+
 local function normalizeData(data)
     if type(data) ~= "table" then
         data = {}
@@ -52,11 +56,18 @@ local function writeStore(data)
     end
     settings:saveSetting(store_key, encoded)
     settings:flush()
+    generation = generation + 1
     return true
 end
 
 function InstallStore.list()
     return readStore().plugins
+end
+
+-- Monotonic counter bumped on every write, so callers can cache data derived
+-- from the store (e.g. an installed-repo lookup) and know when to rebuild it.
+function InstallStore.getGeneration()
+    return generation
 end
 
 function InstallStore.listPatches()

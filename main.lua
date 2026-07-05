@@ -1731,6 +1731,10 @@ function AppStore:showUpdatesDialog()
         on_settings_tap = function()
             self:showPluginUpdatesSettings()
         end,
+        -- Hardware-keyboard hotkeys (r/f/t; no "s" here, this dialog has no sort).
+        on_refresh = function() self:checkAllUpdates() end,
+        on_filter = function() self:showPluginFilterDialog() end,
+        on_switch_tab = function() self:showPatchUpdatesDialog() end,
         on_first_page = function() self:gotoUpdatesPage(1) end,
         on_prev_page = function() self:gotoUpdatesPage((self.updates_state.page or 1) - 1) end,
         on_next_page = function() self:gotoUpdatesPage((self.updates_state.page or 1) + 1) end,
@@ -1849,6 +1853,10 @@ function AppStore:showPatchUpdatesDialog()
         on_settings_tap = function()
             self:showPatchUpdatesSettings()
         end,
+        -- Hardware-keyboard hotkeys (r/f/t; no "s" here, this dialog has no sort).
+        on_refresh = function() self:refreshPatchUpdates() end,
+        on_filter = function() self:showPatchFilterDialog() end,
+        on_switch_tab = function() self:showUpdatesDialog() end,
         on_first_page = function() self:gotoPatchUpdatesPage(1) end,
         on_prev_page = function() self:gotoPatchUpdatesPage((self.patch_updates_state.page or 1) - 1) end,
         on_next_page = function() self:gotoPatchUpdatesPage((self.patch_updates_state.page or 1) + 1) end,
@@ -4180,7 +4188,7 @@ function AppStoreListItem:init()
     -- empty). Build it first so the text area can reserve room for it instead of
     -- being drawn underneath it (long names would otherwise hide behind the ✓).
     local check, mark_reserve
-    if entry.installed then
+    if entry.installed and content_inner > 0 then
         -- face.size is already DPI-scaled and Font:getFace() scales again, so the
         -- 2x face is derived from the unscaled size (orig_size) to avoid scaling
         -- twice, which would oversize the mark on high-DPI screens.
@@ -4190,11 +4198,13 @@ function AppStoreListItem:init()
             face = Font:getFace("smallinfofont", base_size * 2),
             fgcolor = text_color,
         }
-        mark_reserve = check:getSize().w + Size.padding.default
+        -- Never let the mark claim more than half the row, so the text keeps
+        -- some usable width even on very narrow layouts or oversized fonts.
+        mark_reserve = math.min(check:getSize().w + Size.padding.default, math.floor(content_inner / 2))
     end
     local text_box = TextBoxWidget:new{
         text = entry.text or "",
-        width = content_inner - (mark_reserve or 0),
+        width = math.max(1, content_inner - (mark_reserve or 0)),
         face = face,
         fgcolor = text_color,
         alignment = "left",
@@ -4564,6 +4574,7 @@ function AppStoreBrowserDialog:init()
                 end
             end
             if show_progress and idx % progress_step == 0 then
+                self._used_trapper_progress = true
                 Trapper:info(string.format(_("Building list… %d / %d"), idx, total_items), false, true)
             end
             if entry.separator and idx < #self.items then
@@ -7062,22 +7073,10 @@ function AppStore:buildBrowserEntries()
     local end_index = math.min(display_total, start_index + page_size - 1)
 
     -- Set of repos already installed (by full name and repo id), so the
-    -- available list can mark them. Built once per page from install records.
+    -- available list can mark them. Cached across renders; see getInstalledLookup.
     local installed_lookup
     if kind == "plugin" then
-        installed_lookup = {}
-        for _, rec in pairs(getInstallRecordsMap()) do
-            local full_name = rec.repo_full_name
-            if not full_name and rec.owner and rec.repo then
-                full_name = rec.owner .. "/" .. rec.repo
-            end
-            if full_name then
-                installed_lookup[full_name] = true
-            end
-            if rec.repo_id then
-                installed_lookup["id:" .. tostring(rec.repo_id)] = true
-            end
-        end
+        installed_lookup = self:getInstalledLookup()
     end
 
     if display_total == 0 then
@@ -7354,7 +7353,13 @@ function AppStore:showBrowser(kind)
             self.browser_menu = nil
         end,
     }
-    Trapper:reset()
+    -- Trapper is a process-wide singleton; only touch it here if we actually
+    -- showed a progress message above (long single-list page), so a normal
+    -- (short/paginated) rebuild never risks clearing an unrelated Trapper-driven
+    -- dialog that happens to be paused elsewhere in the app at the same time.
+    if dialog._used_trapper_progress then
+        Trapper:reset()
+    end
     self.browser_menu = dialog
     UIManager:show(dialog)
     -- Full refresh so a previous full-screen dialog (the other tab, the installed
@@ -8017,6 +8022,33 @@ local function truncateText(text, max_len)
     return text:sub(1, max_len - 3) .. "..."
 end
 
+
+-- Set of installed repos (by full name and repo id), used to mark the
+-- plugin-kind browse list. Cached in memory and only rebuilt when the
+-- install store actually changes (install/uninstall/match), instead of on
+-- every browser render (page flip, sort, filter change).
+function AppStore:getInstalledLookup()
+    local generation = InstallStore.getGeneration and InstallStore.getGeneration()
+    local cache = self._installed_lookup_cache
+    if cache and cache.generation == generation then
+        return cache.lookup
+    end
+    local lookup = {}
+    for _, rec in pairs(getInstallRecordsMap()) do
+        local full_name = rec.repo_full_name
+        if not full_name and rec.owner and rec.repo then
+            full_name = rec.owner .. "/" .. rec.repo
+        end
+        if full_name then
+            lookup[full_name] = true
+        end
+        if rec.repo_id then
+            lookup["id:" .. tostring(rec.repo_id)] = true
+        end
+    end
+    self._installed_lookup_cache = { generation = generation, lookup = lookup }
+    return lookup
+end
 
 function AppStore:getRepoDescriptors(kind)
     -- Cache the built descriptor list in memory: rebuilding it reads the whole
