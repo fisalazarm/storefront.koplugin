@@ -8794,6 +8794,9 @@ local function performSearchPage(query, page, per_page)
         page = page,
     })
     if not response then
+        if type(err) == "table" and err.is_fine_grained_unsupported then
+            error(_("GitHub rejected this request: fine-grained personal access tokens are not supported for search. Please use a classic token instead (see the AppStore README)."))
+        end
         if type(err) == "table" and err.is_rate_limit then
             error(buildRateLimitMessage())
         end

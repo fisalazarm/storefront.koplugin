@@ -45,8 +45,10 @@ return {
 
 ### How to create a GitHub PAT
 
-1. Sign in at [github.com](https://github.com/) and open **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** (or **Tokens (classic)**), You can follow [this link](https://github.com/settings/tokens/new).
-2. Click **Generate new token**.
+> **Use a classic token, not a fine-grained one.** GitHub's search API (which this plugin relies on to discover plugins/patches) [does not support fine-grained personal access tokens](https://docs.github.com/en/rest/authentication/endpoints-available-for-fine-grained-personal-access-tokens) at all — requests with one will fail regardless of the permissions you grant it. Classic tokens work correctly.
+
+1. Sign in at [github.com](https://github.com/) and open **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**, You can follow [this link](https://github.com/settings/tokens/new).
+2. Click **Generate new token (classic)**.
 3. Name the token (e.g., `KOReader AppStore`), set an expiration, and grant at least the **`public_repo`** scope.
 4. Generate and copy the token immediately—GitHub will not show it again.
 5. Paste it into `appstore_configuration.lua` (You can create that file from `appstore_configuration.sample.lua`) and restart KOReader.

@@ -107,10 +107,17 @@ function GitHubClient.searchRepositories(opts)
     local code, body = request("/search/repositories", query)
     if code ~= 200 then
         logger.warn("GitHub search error", code, body)
+        -- GitHub's search endpoint rejects fine-grained PATs outright (they're
+        -- not in its list of supported token types), returning a 403 with this
+        -- wording rather than an actual rate-limit response. Classic tokens work.
+        local is_fine_grained_unsupported = code == 403
+            and body
+            and body:lower():find("fine%-grained", 1, true) ~= nil
         local err_info = {
             code = code,
             body = body,
-            is_rate_limit = (code == 403 or code == 429),
+            is_rate_limit = (code == 403 or code == 429) and not is_fine_grained_unsupported,
+            is_fine_grained_unsupported = is_fine_grained_unsupported,
         }
         return nil, err_info
     end
