@@ -5874,43 +5874,51 @@ function AppStore:installPluginFromReleaseAsset(repo, release, asset)
             end
         end
 
-        local install_progress = InfoMessage:new{ text = _("Installing plugin…"), timeout = 0 }
-        UIManager:show(install_progress)
-        local ok_extract, dest_or_err = extractPluginToUserDir(reader, info)
-        reader:close()
-        util.removeFile(zip_path)
+        local function proceedWithInstall(dest_root)
+            local install_progress = InfoMessage:new{ text = _("Installing plugin…"), timeout = 0 }
+            UIManager:show(install_progress)
+            local ok_extract, dest_or_err = extractPluginToUserDir(reader, info, dest_root)
+            reader:close()
+            util.removeFile(zip_path)
 
-        if not ok_extract then
-            UIManager:show(InfoMessage:new{ text = _("Installation failed: ") .. tostring(dest_or_err), timeout = 6 })
-            return
+            if not ok_extract then
+                UIManager:show(InfoMessage:new{ text = _("Installation failed: ") .. tostring(dest_or_err), timeout = 6 })
+                return
+            end
+
+            UIManager:close(install_progress)
+
+            -- Some plugins' _meta.lua only set `fullname` (often wrapped in _()), so
+            -- plugin_name parsing can come back nil; fall back to the directory name
+            -- to avoid showing "nil" in the success message.
+            info.plugin_name = info.plugin_name or ((info.plugin_dirname or "plugin"):gsub("%.koplugin$", ""))
+            local msg
+            if self.pending_install_context and self.pending_install_context.mode == "update" then
+                if info.plugin_version and info.plugin_version ~= "" then
+                    msg = string.format(_("Updated plugin \"%s\" to version %s."), info.plugin_name, info.plugin_version)
+                else
+                    msg = string.format(_("Updated plugin \"%s\"."), info.plugin_name)
+                end
+            else
+                if info.plugin_version and info.plugin_version ~= "" then
+                    msg = string.format(_("Installed plugin \"%s\" (version %s)."), info.plugin_name, info.plugin_version)
+                else
+                    msg = string.format(_("Installed plugin \"%s\"."), info.plugin_name)
+                end
+            end
+
+            showRestartConfirmation(msg)
+
+            self:handlePostInstall(info, repo)
+            if self.updates_menu then
+                self:updateUpdatesDialog()
+            end
         end
 
-        UIManager:close(install_progress)
-        
-        -- Some plugins' _meta.lua only set `fullname` (often wrapped in _()), so
-        -- plugin_name parsing can come back nil; fall back to the directory name
-        -- to avoid showing "nil" in the success message.
-        info.plugin_name = info.plugin_name or ((info.plugin_dirname or "plugin"):gsub("%.koplugin$", ""))
-        local msg
         if self.pending_install_context and self.pending_install_context.mode == "update" then
-            if info.plugin_version and info.plugin_version ~= "" then
-                msg = string.format(_("Updated plugin \"%s\" to version %s."), info.plugin_name, info.plugin_version)
-            else
-                msg = string.format(_("Updated plugin \"%s\"."), info.plugin_name)
-            end
+            proceedWithInstall(self.pending_install_context.plugin.root)
         else
-            if info.plugin_version and info.plugin_version ~= "" then
-                msg = string.format(_("Installed plugin \"%s\" (version %s)."), info.plugin_name, info.plugin_version)
-            else
-                msg = string.format(_("Installed plugin \"%s\"."), info.plugin_name)
-            end
-        end
-        
-        showRestartConfirmation(msg)
-
-        self:handlePostInstall(info, repo)
-        if self.updates_menu then
-            self:updateUpdatesDialog()
+            self:resolveNewInstallDestination(proceedWithInstall)
         end
     end)
 end
@@ -8311,10 +8319,10 @@ renderReleaseNotesText = function(repo, release)
     }, "\n")
 end
 
-extractPluginToUserDir = function(reader, info)
-    local plugins_root = DataStorage:getDataDir() .. "/plugins"
-    util.makePath(plugins_root)
-    local target_dir = plugins_root .. "/" .. info.plugin_dirname
+extractPluginToUserDir = function(reader, info, dest_root)
+    dest_root = dest_root or PluginPaths.getDefaultPluginsRoot()
+    util.makePath(dest_root)
+    local target_dir = dest_root .. "/" .. info.plugin_dirname
 
     -- Collect the set of relative paths coming from the archive so we can
     -- remove only those files before extraction.  Files that exist locally
@@ -8543,48 +8551,61 @@ function AppStore:_installPluginFromRepoInternal(repo)
         end
     end
 
-    local install_progress = InfoMessage:new{
-        text = _("Installing plugin…"),
-        timeout = 0,
-    }
-    UIManager:show(install_progress)
-    local ok_extract, dest_or_err = extractPluginToUserDir(reader, info)
-    reader:close()
-    util.removeFile(zip_path)
+    local function proceedWithInstall(dest_root)
+        local install_progress = InfoMessage:new{
+            text = _("Installing plugin…"),
+            timeout = 0,
+        }
+        UIManager:show(install_progress)
+        local ok_extract, dest_or_err = extractPluginToUserDir(reader, info, dest_root)
+        reader:close()
+        util.removeFile(zip_path)
 
-    if not ok_extract then
-        UIManager:show(InfoMessage:new{
-            text = _("Installation failed: ") .. tostring(dest_or_err),
-            timeout = 6,
-        })
-        return
+        if not ok_extract then
+            UIManager:show(InfoMessage:new{
+                text = _("Installation failed: ") .. tostring(dest_or_err),
+                timeout = 6,
+            })
+            return
+        end
+
+        -- Fall back to the directory name if plugin_name came back nil (e.g. a
+        -- _meta.lua that only sets fullname), so we never show "nil".
+        info.plugin_name = info.plugin_name or ((info.plugin_dirname or "plugin"):gsub("%.koplugin$", ""))
+        local msg
+        if self.pending_install_context and self.pending_install_context.mode == "update" then
+            if info.plugin_version and info.plugin_version ~= "" then
+                msg = string.format(_("Updated plugin \"%s\" to version %s."), info.plugin_name, info.plugin_version)
+            else
+                msg = string.format(_("Updated plugin \"%s\"."), info.plugin_name)
+            end
+        else
+            if info.plugin_version and info.plugin_version ~= "" then
+                msg = string.format(_("Installed plugin \"%s\" (version %s)."), info.plugin_name, info.plugin_version)
+            else
+                msg = string.format(_("Installed plugin \"%s\"."), info.plugin_name)
+            end
+        end
+
+        UIManager:close(install_progress)
+        showRestartConfirmation(msg)
+
+        self:handlePostInstall(info, repo)
+        if self.updates_menu then
+            self:updateUpdatesDialog()
+        end
     end
 
-    -- Fall back to the directory name if plugin_name came back nil (e.g. a
-    -- _meta.lua that only sets fullname), so we never show "nil".
-    info.plugin_name = info.plugin_name or ((info.plugin_dirname or "plugin"):gsub("%.koplugin$", ""))
-    local msg
     if self.pending_install_context and self.pending_install_context.mode == "update" then
-        if info.plugin_version and info.plugin_version ~= "" then
-            msg = string.format(_("Updated plugin \"%s\" to version %s."), info.plugin_name, info.plugin_version)
-        else
-            msg = string.format(_("Updated plugin \"%s\"."), info.plugin_name)
-        end
+        proceedWithInstall(self.pending_install_context.plugin.root)
     else
-        if info.plugin_version and info.plugin_version ~= "" then
-            msg = string.format(_("Installed plugin \"%s\" (version %s)."), info.plugin_name, info.plugin_version)
-        else
-            msg = string.format(_("Installed plugin \"%s\"."), info.plugin_name)
-        end
+        self:resolveNewInstallDestination(proceedWithInstall)
     end
+end
 
-    UIManager:close(install_progress)
-    showRestartConfirmation(msg)
-
-    self:handlePostInstall(info, repo)
-    if self.updates_menu then
-        self:updateUpdatesDialog()
-    end
+-- TEMPORARY until Task 5: forwards straight to the default root.
+function AppStore:resolveNewInstallDestination(callback)
+    callback(PluginPaths.getDefaultPluginsRoot())
 end
 
 function AppStore:handlePostInstall(info, repo)
