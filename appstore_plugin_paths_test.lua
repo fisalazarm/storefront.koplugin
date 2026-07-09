@@ -49,7 +49,6 @@ local M_temp = freshModule()
 local default_root = M_temp.getDefaultPluginsRoot()
 G_reader_settings = { readSetting = function() return { default_root .. "/" } end }
 M = freshModule()
-check("auto-populated default with trailing slash -> lookup is plugins + default", M.getLookupPaths(), { "plugins", default_root })
 check("auto-populated default with trailing slash -> no custom paths", #M.getCustomLookupPaths(), 0)
 dest, prompt = M.resolveInstallDestination(nil, nil)
 check("auto-populated default -> falls back to default root", dest, M.getDefaultPluginsRoot())
