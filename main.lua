@@ -3045,7 +3045,7 @@ function AppStore:modifyPlugin(plugin)
 end
 
 function AppStore:showPluginFilesDialog(plugin, filter_config_only)
-    local plugin_path = PLUGINS_ROOT .. "/" .. plugin.dirname
+    local plugin_path = plugin.path
     if lfs.attributes(plugin_path, "mode") ~= "directory" then
         UIManager:show(InfoMessage:new{
             text = _("Plugin directory not found."),
@@ -3382,8 +3382,8 @@ end
 function AppStore:performPluginDeletion(dirname, record, plugin_instance_for_settings)
     local plugin = findInstalledPlugin(dirname)
     local display_name = plugin and (plugin.name or plugin.dirname) or dirname
-    
-    local plugin_path = PLUGINS_ROOT .. "/" .. dirname
+
+    local plugin_path = (plugin and plugin.path) or (PluginPaths.getDefaultPluginsRoot() .. "/" .. dirname)
     local ok, err = deleteDirectoryRecursive(plugin_path)
     if ok then
         if plugin_instance_for_settings then
