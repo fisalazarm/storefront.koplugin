@@ -12,6 +12,22 @@ Discover, install, and update community-created KOReader plugins and user patche
 3. Restart KOReader.
 4. Access via **Tools** → **App Store**.
 
+### Using a custom plugin folder (`extra_plugin_paths`)
+
+If you've pointed KOReader's `extra_plugin_paths` setting at a different
+folder (to keep third-party plugins separate from the default location),
+AppStore follows it automatically: it looks in every directory KOReader
+itself would load plugins from, not just the default one.
+
+When installing a *new* plugin (not updating one already installed):
+- If exactly one custom folder is configured, new plugins install there.
+- If you have more than one custom folder and haven't set
+  `plugin_install_path` in `appstore_configuration.lua`, you'll be asked
+  once which folder to use, with a "don't ask again" checkbox to remember
+  your choice for next time.
+- Updating an already-installed plugin always writes back to wherever that
+  plugin currently lives, regardless of any of the above.
+
 ## Key Capabilities
 
 - **Unified browser** for both plugins and user patches with persistent filters and paging.
