@@ -8444,6 +8444,9 @@ function AppStore:resolveNewInstallDestination(callback)
         title = _("Multiple custom plugin folders are configured. Where should this plugin be installed?"),
         title_align = "center",
         buttons = buttons,
+        dismissable = false, -- a destination choice is mandatory; the downloaded
+        -- archive and its reader handle are only cleaned up inside the button
+        -- callbacks above, so this dialog must not be dismissable without one.
     }
 
     local remember_checkbox = CheckButton:new{

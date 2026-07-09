@@ -97,6 +97,30 @@ dest, prompt = M.resolveInstallDestination(nil, scratch .. "/custom_b")
 check("stale remembered choice falls back to single custom path", dest, scratch .. "/custom_a")
 check("stale remembered choice -> no prompt (single custom path remains)", prompt, false)
 
+-- Scenario 9: aliasing dedup -- two different path strings in
+-- extra_plugin_paths that resolve (via a symlink) to the same real
+-- directory must only produce ONE lookup-path entry, not two.
+os.execute("mkdir -p " .. scratch .. "/real_dir")
+os.execute("ln -sfn " .. scratch .. "/real_dir " .. scratch .. "/alias_link")
+G_reader_settings = { readSetting = function()
+    return { scratch .. "/real_dir", scratch .. "/alias_link" }
+end }
+M = freshModule()
+check("aliased paths dedup to a single lookup entry", #M.getLookupPaths(), 2)
+
+-- Scenario 10: a remembered/override path in a different string format
+-- (but same real directory) as an already-configured lookup path must
+-- still resolve without prompting -- proving the comparison is real-path
+-- based, not string based.
+G_reader_settings = { readSetting = function() return scratch .. "/real_dir" end }
+M = freshModule()
+local remembered = M.getLookupPaths()[2]
+check("configured custom entry is present for scenario 10", remembered, scratch .. "/real_dir")
+local differently_formatted = scratch .. "/real_dir/."
+dest, prompt = M.resolveInstallDestination(nil, differently_formatted)
+check("differently-formatted same-real-path remembered choice resolves", dest, differently_formatted)
+check("differently-formatted same-real-path remembered choice -> no prompt", prompt, false)
+
 os.execute("rm -rf " .. scratch)
 
 if failures == 0 then

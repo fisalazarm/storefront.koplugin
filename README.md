@@ -24,7 +24,9 @@ When installing a *new* plugin (not updating one already installed):
 - If you have more than one custom folder and haven't set
   `plugin_install_path` in `appstore_configuration.lua`, you'll be asked
   once which folder to use, with a "don't ask again" checkbox to remember
-  your choice for next time.
+  your choice for next time. `plugin_install_path` is matched against the
+  real, resolved directory of each lookup path, so set it to an absolute
+  path pointing at one of your actual `extra_plugin_paths` entries.
 - Updating an already-installed plugin always writes back to wherever that
   plugin currently lives, regardless of any of the above.
 
