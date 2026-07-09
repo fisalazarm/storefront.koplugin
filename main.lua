@@ -8391,9 +8391,72 @@ extractPluginToUserDir = function(reader, info, dest_root)
     return true, target_dir
 end
 
--- TEMPORARY until Task 5: forwards straight to the default root.
+-- NOTE: appstore_configuration and the remembered-path settings key are
+-- resolved locally (rather than as file-level locals like the other
+-- *_KEY constants) because main.lua's chunk is already at LuaJIT's 200
+-- local variable ceiling; scoping them to this function keeps them out of
+-- that shared budget without changing behavior (require() is cached, so
+-- repeat calls are cheap).
 function AppStore:resolveNewInstallDestination(callback)
-    callback(PluginPaths.getDefaultPluginsRoot())
+    local REMEMBERED_PLUGIN_INSTALL_PATH_KEY = "remembered_plugin_install_path"
+    local ok_cfg, AppStoreConfig = pcall(require, "appstore_configuration")
+    if not ok_cfg then
+        AppStoreConfig = {}
+    end
+
+    local config_override = AppStoreConfig.plugin_install_path
+    local remembered_path = AppStoreSettings:readSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY)
+
+    local dest_root, needs_prompt, candidates = PluginPaths.resolveInstallDestination(config_override, remembered_path)
+    if not needs_prompt then
+        callback(dest_root)
+        return
+    end
+
+    local options = {}
+    for _, p in ipairs(candidates) do
+        table.insert(options, p)
+    end
+    table.insert(options, PluginPaths.getDefaultPluginsRoot())
+
+    local remember_choice = false
+    local dialog
+    local buttons = {}
+    for _, path_option in ipairs(options) do
+        local chosen_path = path_option -- upvalue capture per row
+        table.insert(buttons, {
+            {
+                text = chosen_path,
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(dialog)
+                    if remember_choice then
+                        AppStoreSettings:saveSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY, chosen_path)
+                        AppStoreSettings:flush()
+                    end
+                    callback(chosen_path)
+                end,
+            },
+        })
+    end
+
+    dialog = ButtonDialog:new{
+        title = _("Multiple custom plugin folders are configured. Where should this plugin be installed?"),
+        title_align = "center",
+        buttons = buttons,
+    }
+
+    local remember_checkbox = CheckButton:new{
+        text = _("Always install here (don't ask again)"),
+        checked = false,
+        parent = dialog,
+        callback = function()
+            remember_choice = not remember_choice
+        end,
+    }
+    dialog:addWidget(remember_checkbox)
+
+    UIManager:show(dialog)
 end
 
 function AppStore:promptRepoAction(repo)
