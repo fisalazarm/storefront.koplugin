@@ -40,6 +40,21 @@ local dest, prompt = M.resolveInstallDestination(nil, nil)
 check("no custom paths -> falls back to default root", dest, M.getDefaultPluginsRoot())
 check("no custom paths -> no prompt needed", prompt, false)
 
+-- Scenario 1b: extra_plugin_paths set to auto-populated default (with trailing slash).
+-- This simulates KOReader's frontend/pluginloader.lua behavior, which auto-populates
+-- extra_plugin_paths with DataStorage:getDataDir() .. "/plugins/" on first read.
+-- Users with this setup must see zero behavior change (no prompt, no custom paths).
+G_reader_settings = { readSetting = function() return nil end }
+local M_temp = freshModule()
+local default_root = M_temp.getDefaultPluginsRoot()
+G_reader_settings = { readSetting = function() return { default_root .. "/" } end }
+M = freshModule()
+check("auto-populated default with trailing slash -> lookup is plugins + default", M.getLookupPaths(), { "plugins", default_root })
+check("auto-populated default with trailing slash -> no custom paths", #M.getCustomLookupPaths(), 0)
+dest, prompt = M.resolveInstallDestination(nil, nil)
+check("auto-populated default -> falls back to default root", dest, M.getDefaultPluginsRoot())
+check("auto-populated default -> no prompt needed", prompt, false)
+
 -- Scenario 2: a single custom extra_plugin_paths entry (the reporter's setup).
 G_reader_settings = { readSetting = function() return scratch .. "/custom_a" end }
 M = freshModule()
