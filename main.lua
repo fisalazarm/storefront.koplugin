@@ -5215,7 +5215,19 @@ function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_
                 if not body or body == json.null or body == "" then
                     body = _("No release notes.")
                 else
-                    body = softWrapLongTokens(tostring(body), 60)
+                    -- Trim leading/trailing blank lines and collapse any run of
+                    -- 3+ newlines down to a single blank line. GitHub release
+                    -- bodies commonly end with (or contain) extra blank lines;
+                    -- left as-is, these stack with our own "\n\n" separators
+                    -- between sections and can push an entire page of the
+                    -- changelog viewer to be blank when paging through it.
+                    body = util.trim(tostring(body))
+                    if body == "" then
+                        body = _("No release notes.")
+                    else
+                        body = body:gsub("\n[ \t]*\n[ \t]*\n+", "\n\n")
+                        body = softWrapLongTokens(body, 60)
+                    end
                 end
                 table.insert(sections, header .. "\n\n" .. body)
             end
