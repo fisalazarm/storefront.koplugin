@@ -1670,6 +1670,63 @@ function AppStore:closePatchUpdatesDialog(skip_scroll_save)
     end
 end
 
+function AppStore:showManagePluginPathsDialog()
+    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+    local lookup_paths = PluginPaths.getLookupPaths()
+
+    local button_dialog
+    local buttons = {}
+    for _, path in ipairs(lookup_paths) do
+        local this_path = path -- upvalue capture per row
+        local is_hidden = PluginPaths.isPathHidden(this_path, hidden_paths)
+        local checkbox_text = is_hidden and "☐ " or "☑ "
+        table.insert(buttons, {
+            {
+                text = checkbox_text .. this_path,
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    local current_hidden = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+                    local new_hidden = {}
+                    local was_hidden = false
+                    for _, h in ipairs(current_hidden) do
+                        if PluginPaths.isPathHidden(this_path, { h }) then
+                            was_hidden = true
+                        else
+                            table.insert(new_hidden, h)
+                        end
+                    end
+                    if not was_hidden then
+                        table.insert(new_hidden, this_path)
+                    end
+                    AppStoreSettings:saveSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY, new_hidden)
+                    AppStoreSettings:flush()
+                    UIManager:close(button_dialog)
+                    UIManager:nextTick(function()
+                        self:showManagePluginPathsDialog()
+                    end)
+                end,
+            },
+        })
+    end
+
+    table.insert(buttons, {
+        {
+            text = _("Close"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(button_dialog)
+            end,
+        },
+    })
+
+    button_dialog = ButtonDialog:new{
+        title = _("Manage plugin paths\n\nHiding a path only affects what AppStore shows/manages here. KOReader will still load plugins from it."),
+        title_align = "center",
+        buttons = buttons,
+    }
+    UIManager:show(button_dialog)
+end
+
 function AppStore:showPluginUpdatesSettings()
     local allow_delete_unlinked = AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
     local checkbox_text = allow_delete_unlinked and "☑ " or "☐ "
@@ -1694,46 +1751,61 @@ function AppStore:showPluginUpdatesSettings()
                 end,
             },
         },
-        {
-            {
-                text = string.format(_("Items per page: %d"), getManagePageSize()),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(button_dialog)
-                    UIManager:show(SpinWidget:new{
-                        title_text = _("Items per page"),
-                        value = getManagePageSize(),
-                        value_min = MIN_BROWSER_PAGE_SIZE,
-                        value_max = MAX_BROWSER_PAGE_SIZE,
-                        ok_text = _("Set"),
-                        callback = function(spin)
-                            AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
-                            AppStoreSettings:flush()
-                            self:ensureUpdatesState()
-                            self.updates_state.page = 1
-                            self.updates_state.scroll_offset = nil
-                            -- Reset the open scroller before closing, else
-                            -- on_dismiss saves the old offset back over the nil.
-                            if self.updates_menu and self.updates_menu.resetScroll then
-                                self.updates_menu:resetScroll()
-                            end
-                            self:closeUpdatesDialog(true)
-                            self:showUpdatesDialog()
-                        end,
-                    })
-                end,
-            },
-        },
-        {
-            {
-                text = _("Close"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(button_dialog)
-                end,
-            },
-        },
     }
+
+    if #PluginPaths.getLookupPaths() > 1 then
+        table.insert(buttons, {
+            {
+                text = _("Manage plugin paths"),
+                background = Blitbuffer.COLOR_WHITE,
+                callback = function()
+                    UIManager:close(button_dialog)
+                    self:showManagePluginPathsDialog()
+                end,
+            },
+        })
+    end
+
+    table.insert(buttons, {
+        {
+            text = string.format(_("Items per page: %d"), getManagePageSize()),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(button_dialog)
+                UIManager:show(SpinWidget:new{
+                    title_text = _("Items per page"),
+                    value = getManagePageSize(),
+                    value_min = MIN_BROWSER_PAGE_SIZE,
+                    value_max = MAX_BROWSER_PAGE_SIZE,
+                    ok_text = _("Set"),
+                    callback = function(spin)
+                        AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
+                        AppStoreSettings:flush()
+                        self:ensureUpdatesState()
+                        self.updates_state.page = 1
+                        self.updates_state.scroll_offset = nil
+                        -- Reset the open scroller before closing, else
+                        -- on_dismiss saves the old offset back over the nil.
+                        if self.updates_menu and self.updates_menu.resetScroll then
+                            self.updates_menu:resetScroll()
+                        end
+                        self:closeUpdatesDialog(true)
+                        self:showUpdatesDialog()
+                    end,
+                })
+            end,
+        },
+    })
+
+    table.insert(buttons, {
+        {
+            text = _("Close"),
+            background = Blitbuffer.COLOR_WHITE,
+            callback = function()
+                UIManager:close(button_dialog)
+            end,
+        },
+    })
 
     button_dialog = ButtonDialog:new{
         title = _("Installed Plugins Settings"),
