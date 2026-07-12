@@ -77,6 +77,33 @@ function M.getCustomLookupPaths()
     return custom
 end
 
+-- AppStoreSettings key for the user's per-path hide/show preference (an
+-- array of path strings, compared by resolved real path -- see
+-- isPathHidden). Exposed here as a field on this module's table, rather
+-- than as a main.lua file-level local, because main.lua's chunk is
+-- already at LuaJIT's 200-local ceiling (see the NOTE above
+-- AppStore:resolveNewInstallDestination in main.lua).
+M.HIDDEN_PLUGIN_PATHS_KEY = "hidden_plugin_paths"
+
+-- Returns whether `path` resolves (via ffiUtil.realpath) to the same real
+-- directory as any entry in `hidden_paths`. A nil/empty hidden_paths, or a
+-- path with no resolvable real path, never counts as hidden.
+function M.isPathHidden(path, hidden_paths)
+    if not hidden_paths or #hidden_paths == 0 then
+        return false
+    end
+    local real_path = ffiUtil.realpath(path)
+    if not real_path then
+        return false
+    end
+    for _, h in ipairs(hidden_paths) do
+        if ffiUtil.realpath(h) == real_path then
+            return true
+        end
+    end
+    return false
+end
+
 -- Returns whether `path` resolves (via ffiUtil.realpath) to the same real
 -- directory as any entry currently in M.getLookupPaths(). A nil realpath
 -- (path doesn't exist) never matches anything.
@@ -101,26 +128,42 @@ end
 --
 -- config_override: string|nil  -- `plugin_install_path` from appstore_configuration.lua
 -- remembered_path:  string|nil -- previously remembered choice (AppStoreSettings)
+-- hidden_paths:     table|nil  -- paths the user hid via "Manage plugin paths"
+--                                 (same shape as isPathHidden's 2nd arg)
 --
 -- Returns dest_root (string|nil), needs_prompt (boolean), candidates (table|nil,
--- only set when needs_prompt is true).
-function M.resolveInstallDestination(config_override, remembered_path)
-    if config_override and config_override ~= "" and pathInLookup(config_override) then
-        return config_override, false
+-- only set when needs_prompt is true), all_hidden (boolean, true when custom
+-- paths exist but every one of them is currently hidden -- distinct from "no
+-- custom paths configured at all", which silently falls back to the default
+-- root exactly as before this parameter existed).
+function M.resolveInstallDestination(config_override, remembered_path, hidden_paths)
+    if config_override and config_override ~= "" and pathInLookup(config_override)
+        and not M.isPathHidden(config_override, hidden_paths) then
+        return config_override, false, nil, false
     end
 
-    if remembered_path and remembered_path ~= "" and pathInLookup(remembered_path) then
-        return remembered_path, false
+    if remembered_path and remembered_path ~= "" and pathInLookup(remembered_path)
+        and not M.isPathHidden(remembered_path, hidden_paths) then
+        return remembered_path, false, nil, false
     end
 
     local custom = M.getCustomLookupPaths()
-    if #custom == 1 then
-        return custom[1], false
-    elseif #custom >= 2 then
-        return nil, true, custom
+    local visible_custom = {}
+    for _, p in ipairs(custom) do
+        if not M.isPathHidden(p, hidden_paths) then
+            table.insert(visible_custom, p)
+        end
     end
 
-    return M.getDefaultPluginsRoot(), false
+    if #custom > 0 and #visible_custom == 0 then
+        return nil, false, nil, true
+    elseif #visible_custom == 1 then
+        return visible_custom[1], false, nil, false
+    elseif #visible_custom >= 2 then
+        return nil, true, visible_custom, false
+    end
+
+    return M.getDefaultPluginsRoot(), false, nil, false
 end
 
 return M

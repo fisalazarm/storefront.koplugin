@@ -121,6 +121,57 @@ dest, prompt = M.resolveInstallDestination(nil, differently_formatted)
 check("differently-formatted same-real-path remembered choice resolves", dest, differently_formatted)
 check("differently-formatted same-real-path remembered choice -> no prompt", prompt, false)
 
+-- Scenario 11: isPathHidden matching.
+check("isPathHidden: nil hidden_paths -> not hidden", M.isPathHidden(scratch .. "/custom_a", nil), false)
+check("isPathHidden: empty hidden_paths -> not hidden", M.isPathHidden(scratch .. "/custom_a", {}), false)
+check("isPathHidden: exact match -> hidden", M.isPathHidden(scratch .. "/custom_a", { scratch .. "/custom_a" }), true)
+check("isPathHidden: no match -> not hidden", M.isPathHidden(scratch .. "/custom_a", { scratch .. "/custom_b" }), false)
+check("isPathHidden: realpath-equivalent match", M.isPathHidden(scratch .. "/real_dir", { scratch .. "/alias_link" }), true)
+
+-- Scenario 12: single custom path, hidden -> all_hidden signal, no
+-- destination, no prompt.
+G_reader_settings = { readSetting = function() return scratch .. "/custom_a" end }
+M = freshModule()
+local candidates, all_hidden
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(nil, nil, { scratch .. "/custom_a" })
+check("single custom path, hidden -> all_hidden", all_hidden, true)
+check("single custom path, hidden -> no destination", dest, nil)
+check("single custom path, hidden -> no prompt", prompt, false)
+
+-- Scenario 13: two custom paths, one hidden -> resolves to the remaining
+-- visible one directly, no prompt.
+G_reader_settings = { readSetting = function() return { scratch .. "/custom_a", scratch .. "/custom_b" } end }
+M = freshModule()
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(nil, nil, { scratch .. "/custom_a" })
+check("two custom paths, one hidden -> resolves to the visible one", dest, scratch .. "/custom_b")
+check("two custom paths, one hidden -> no prompt", prompt, false)
+check("two custom paths, one hidden -> not all_hidden", all_hidden, false)
+
+-- Scenario 14: two custom paths, both hidden -> all_hidden signal.
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(nil, nil, { scratch .. "/custom_a", scratch .. "/custom_b" })
+check("two custom paths, both hidden -> all_hidden", all_hidden, true)
+check("two custom paths, both hidden -> no prompt", prompt, false)
+
+-- Scenario 15: a config override pointing at a hidden path falls through
+-- to visible-path resolution (the other custom path is still visible).
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(scratch .. "/custom_a", nil, { scratch .. "/custom_a" })
+check("hidden config override falls through to visible-path resolution", dest, scratch .. "/custom_b")
+check("hidden config override -> not all_hidden (one path still visible)", all_hidden, false)
+
+-- Scenario 16: a remembered path pointing at a hidden path falls through,
+-- same shape as scenario 15.
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(nil, scratch .. "/custom_b", { scratch .. "/custom_b" })
+check("hidden remembered path falls through to visible-path resolution", dest, scratch .. "/custom_a")
+
+-- Scenario 17: zero custom paths configured at all -> hidden_paths is
+-- irrelevant, unaffected silent fallback to the default root (all_hidden
+-- only fires when custom paths actually exist).
+G_reader_settings = { readSetting = function() return nil end }
+M = freshModule()
+dest, prompt, candidates, all_hidden = M.resolveInstallDestination(nil, nil, { "/some/irrelevant/hidden/path" })
+check("no custom paths at all -> unaffected by hidden_paths", dest, M.getDefaultPluginsRoot())
+check("no custom paths at all -> not all_hidden", all_hidden, false)
+
 os.execute("rm -rf " .. scratch)
 
 if failures == 0 then
