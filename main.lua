@@ -1107,8 +1107,9 @@ end
 
 local function listInstalledPlugins()
     local plugins = {}
+    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
     for _, root in ipairs(PluginPaths.getLookupPaths()) do
-        if lfs.attributes(root, "mode") == "directory" then
+        if lfs.attributes(root, "mode") == "directory" and not PluginPaths.isPathHidden(root, hidden_paths) then
             for entry in lfs.dir(root) do
                 if entry ~= "." and entry ~= ".." and entry:match("%.koplugin$") then
                     local meta = loadPluginMeta(root, entry)
