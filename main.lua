@@ -6003,7 +6003,10 @@ function AppStore:installPluginFromReleaseAsset(repo, release, asset)
         if self.pending_install_context and self.pending_install_context.mode == "update" then
             proceedWithInstall(self.pending_install_context.plugin.root)
         else
-            self:resolveNewInstallDestination(proceedWithInstall)
+            self:resolveNewInstallDestination(proceedWithInstall, function()
+                reader:close()
+                util.removeFile(zip_path)
+            end)
         end
     end)
 end
@@ -8482,7 +8485,7 @@ end
 -- local variable ceiling; scoping them to this function keeps them out of
 -- that shared budget without changing behavior (require() is cached, so
 -- repeat calls are cheap).
-function AppStore:resolveNewInstallDestination(callback)
+function AppStore:resolveNewInstallDestination(callback, on_cancel)
     local REMEMBERED_PLUGIN_INSTALL_PATH_KEY = "remembered_plugin_install_path"
     local ok_cfg, AppStoreConfig = pcall(require, "appstore_configuration")
     if not ok_cfg then
@@ -8491,8 +8494,28 @@ function AppStore:resolveNewInstallDestination(callback)
 
     local config_override = AppStoreConfig.plugin_install_path
     local remembered_path = AppStoreSettings:readSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY)
+    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
 
-    local dest_root, needs_prompt, candidates = PluginPaths.resolveInstallDestination(config_override, remembered_path)
+    local dest_root, needs_prompt, candidates, all_hidden =
+        PluginPaths.resolveInstallDestination(config_override, remembered_path, hidden_paths)
+
+    if all_hidden then
+        local warn_dialog
+        warn_dialog = ConfirmBox:new{
+            text = _("All of your custom plugin folders are currently hidden (see Manage plugin paths). Install to the default plugin folder anyway?"),
+            ok_text = _("Install to default"),
+            ok_callback = function()
+                callback(PluginPaths.getDefaultPluginsRoot())
+            end,
+            cancel_text = _("Cancel"),
+            cancel_callback = function()
+                on_cancel()
+            end,
+        }
+        UIManager:show(warn_dialog)
+        return
+    end
+
     if not needs_prompt then
         callback(dest_root)
         return
@@ -8755,7 +8778,10 @@ function AppStore:_installPluginFromRepoInternal(repo)
     if self.pending_install_context and self.pending_install_context.mode == "update" then
         proceedWithInstall(self.pending_install_context.plugin.root)
     else
-        self:resolveNewInstallDestination(proceedWithInstall)
+        self:resolveNewInstallDestination(proceedWithInstall, function()
+            reader:close()
+            util.removeFile(zip_path)
+        end)
     end
 end
 
