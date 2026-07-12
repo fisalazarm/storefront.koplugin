@@ -30,6 +30,13 @@ When installing a *new* plugin (not updating one already installed):
 - Updating an already-installed plugin always writes back to wherever that
   plugin currently lives, regardless of any of the above.
 
+Every plugin AppStore finds (including KOReader's own bundled built-in plugins) is fully
+manageable by default. If you'd rather not see some of them in the installed/updates list —
+most commonly the bundled built-ins — open **Installed Plugins Settings → Manage plugin
+paths** and uncheck any folder you don't want AppStore to track. Hiding a folder only affects
+what AppStore shows here; KOReader still loads plugins from it normally. A hidden folder is
+also skipped when picking where to install a brand-new plugin.
+
 ## Key Capabilities
 
 - **Unified browser** for both plugins and user patches with persistent filters and paging.
