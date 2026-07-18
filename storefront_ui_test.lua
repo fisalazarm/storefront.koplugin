@@ -141,6 +141,7 @@ package.loaded["ui/size"] = {
 package.loaded["ui/uimanager"] = {
     show = function() end,
     close = function() end,
+    setDirty = function() end,
 }
 
 -- Setup basic reader settings mock
@@ -209,6 +210,8 @@ if ok_browser then
             browser_state = { kind = "plugin" },
             browserRefresh = function() end,
             saveBrowserState = function() end,
+            getInstallRecordsMap = function() return {} end,
+            getPatchRecordsMap = function() return {} end,
         }
         local show_ok, err = pcall(function()
             StorefrontSettingsCard.show(dummy_storefront)
@@ -224,9 +227,16 @@ if ok_browser then
         check("Details dialog loaded successfully", type(StorefrontDetailsDialog) == "table", true)
         
         local dummy_repo = { name = "test-plugin", stars = "123", data = { owner = { login = "test-owner" } } }
+        local full_dummy_storefront = {
+            browser_state = { kind = "plugin" },
+            browserRefresh = function() end,
+            saveBrowserState = function() end,
+            getInstallRecordsMap = function() return {} end,
+            getPatchRecordsMap = function() return {} end,
+        }
         local details_ok, details_err = pcall(function()
             local details = StorefrontDetailsDialog:new{
-                Storefront = dummy_storefront,
+                Storefront = full_dummy_storefront,
                 repo = dummy_repo,
                 kind = "plugin",
             }

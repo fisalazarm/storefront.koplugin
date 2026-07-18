@@ -61,13 +61,13 @@ local ALLOW_DELETE_UNLINKED_PATCHES_KEY = "allow_delete_unlinked_patches"
 local IGNORED_RELEASES_KEY = "ignored_releases"
 
 local STALE_WARNING_SECONDS = 7 * 24 * 3600
-local DEFAULT_BROWSER_PAGE_SIZE = 14
+local DEFAULT_BROWSER_PAGE_SIZE = 5
 local MIN_BROWSER_PAGE_SIZE = 4
 local MAX_BROWSER_PAGE_SIZE = 100
 -- Installed/manage lists hold taller multi-line entries (name + version +
 -- update status), so they get their own page-size setting, defaulting smaller
 -- than the compact available-browser list.
-local DEFAULT_MANAGE_PAGE_SIZE = 7
+local DEFAULT_MANAGE_PAGE_SIZE = 5
 local PLUGIN_TOPICS = { "koreader-plugin" }
 local PATCH_TOPICS = { "koreader-user-patch" }
 local PLUGIN_NAME_QUERIES = { 'in:name ".koplugin"' }
@@ -8211,6 +8211,11 @@ function Storefront:init()
     self.cache_dir = ensureCacheDir()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    
+    -- Migrate settings to page size 5
+    StorefrontSettings:writeSetting(BROWSER_PAGE_SIZE_KEY, 5)
+    StorefrontSettings:writeSetting(MANAGE_PAGE_SIZE_KEY, 5)
+    StorefrontSettings:flush()
 end
 
 function Storefront:addToMainMenu(menu_items)

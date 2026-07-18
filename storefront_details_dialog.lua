@@ -2,11 +2,12 @@ local Blitbuffer = require("ffi/blitbuffer")
 local Button = require("ui/widget/button")
 local Device = require("device")
 local Font = require("ui/font")
+local FocusManager = require("ui/widget/focusmanager")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local InputContainer = require("ui/widget/container/inputcontainer")
 local LineWidget = require("ui/widget/linewidget")
 local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
@@ -21,7 +22,10 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local HtmlBoxWidget = require("ui/widget/htmlboxwidget")
 local util = require("util")
 
-local StorefrontDetailsDialog = WidgetContainer:extend{
+local Input = Device.input
+
+local StorefrontDetailsDialog = InputContainer:extend{
+    covers_fullscreen = true,
     Storefront = nil,
     repo = nil,
     patch = nil,
@@ -33,42 +37,52 @@ function StorefrontDetailsDialog:init()
     local sc = function(val) return Device.screen:scaleBySize(val) end
     self.screen_w = Device.screen:getWidth()
     self.screen_h = Device.screen:getHeight()
-    
-    -- Make truly full screen (no margins/gaps)
+
+    -- Full-screen dimen
     self.dimen = Geom:new{ x = 0, y = 0, w = self.screen_w, h = self.screen_h }
 
-    -- 1. Back button
+    -- Hardware back key closes the dialog
+    if Device:hasKeys() then
+        self.key_events.Close = { { Input.group.Back } }
+    end
+
+    -- -----------------------------------------------------------------------
+    -- 1. Back button (software)
+    -- -----------------------------------------------------------------------
     local back_btn = Button:new{
         text = "< Back",
         text_font_size = 20,
         bordersize = sc(1),
         padding = sc(8),
         background = Blitbuffer.COLOR_WHITE,
+        show_parent = self,
         callback = function()
-            UIManager:close(self)
+            self:onClose()
         end,
     }
 
+    -- -----------------------------------------------------------------------
     -- 2. Title & Metadata
+    -- -----------------------------------------------------------------------
     local title_text = ""
-    local meta_text = ""
-    local desc_text = ""
+    local meta_text  = ""
+    local desc_text  = ""
 
     if self.patch then
         title_text = self.patch.filename or _("Patch")
         local repo_name = self.repo.full_name or self.repo.name or ""
-        meta_text = string.format("%s  ·  branch %s", repo_name, self.patch.branch or "HEAD")
-        desc_text = self.patch.display_path or ""
+        meta_text  = string.format("%s  ·  branch %s", repo_name, self.patch.branch or "HEAD")
+        desc_text  = self.patch.display_path or ""
     else
         title_text = self.repo.name or self.repo.full_name or _("Repository")
-        local owner = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login) or ""
-        local stars = tonumber(self.repo.stars) or (self.repo.data and tonumber(self.repo.data.stargazers_count)) or 0
+        local owner  = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login) or ""
+        local stars  = tonumber(self.repo.stars) or (self.repo.data and tonumber(self.repo.data.stargazers_count)) or 0
         local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
-        local ts = self.repo.data and (self.repo.data.pushed_at or self.repo.data.updated_at or self.repo.data.created_at)
+        local ts     = self.repo.data and (self.repo.data.pushed_at or self.repo.data.updated_at or self.repo.data.created_at)
         local updated = (ts and type(ts) == "string") and ts:sub(1, 10) or ""
-        
+
         local meta_parts = {}
-        if owner ~= "" then table.insert(meta_parts, owner) end
+        if owner   ~= "" then table.insert(meta_parts, owner) end
         table.insert(meta_parts, "★ " .. stars_fmt)
         if updated ~= "" then table.insert(meta_parts, "updated " .. updated) end
         meta_text = table.concat(meta_parts, "  ·  ")
@@ -81,13 +95,11 @@ function StorefrontDetailsDialog:init()
         bold = true,
         fgcolor = Blitbuffer.COLOR_BLACK,
     }
-
     local meta_label = TextWidget:new{
         text = meta_text,
         face = Font:getFace("cfont", 14),
         fgcolor = Blitbuffer.COLOR_DARK_GRAY,
     }
-
     local desc_label = TextBoxWidget:new{
         text = desc_text,
         face = Font:getFace("cfont", 16),
@@ -95,10 +107,12 @@ function StorefrontDetailsDialog:init()
         width = self.screen_w - sc(24),
     }
 
-    -- 3. Action Buttons (Full width primary action button)
+    -- -----------------------------------------------------------------------
+    -- 3. Action button(s)
+    -- -----------------------------------------------------------------------
     local action_btn_width = self.screen_w - sc(24)
     local is_installed = false
-    local has_update = false
+    local has_update   = false
 
     if self.patch then
         local patch_map = self.Storefront.getPatchRecordsMap()
@@ -118,14 +132,15 @@ function StorefrontDetailsDialog:init()
         main_action_btn = HorizontalGroup:new{
             Button:new{
                 text = _("Update"),
-                text_font_size = 20,
+                text_font_size = 18,
                 background = Blitbuffer.COLOR_BLACK,
                 bordersize = 0,
-                padding = sc(14),
+                padding = sc(11),
                 radius = sc(4),
                 width = (action_btn_width - sc(12)) / 2,
+                show_parent = self,
                 callback = function()
-                    UIManager:close(self)
+                    self:onClose()
                     if self.patch then
                         self.Storefront:promptPatchUpdateAction(self.update_item)
                     else
@@ -136,14 +151,15 @@ function StorefrontDetailsDialog:init()
             HorizontalSpan:new{ width = sc(12) },
             Button:new{
                 text = _("Uninstall"),
-                text_font_size = 20,
+                text_font_size = 18,
                 background = Blitbuffer.COLOR_WHITE,
                 bordersize = sc(1),
-                padding = sc(14),
+                padding = sc(11),
                 radius = sc(4),
                 width = (action_btn_width - sc(12)) / 2,
+                show_parent = self,
                 callback = function()
-                    UIManager:close(self)
+                    self:onClose()
                     if self.patch then
                         self.Storefront:uninstallPatch(self.repo, self.patch)
                     else
@@ -156,14 +172,15 @@ function StorefrontDetailsDialog:init()
     elseif is_installed then
         main_action_btn = Button:new{
             text = _("Uninstall"),
-            text_font_size = 20,
+            text_font_size = 18,
             background = Blitbuffer.COLOR_WHITE,
             bordersize = sc(1),
-            padding = sc(14),
+            padding = sc(11),
             radius = sc(4),
             width = action_btn_width,
+            show_parent = self,
             callback = function()
-                UIManager:close(self)
+                self:onClose()
                 if self.patch then
                     self.Storefront:uninstallPatch(self.repo, self.patch)
                 else
@@ -174,14 +191,15 @@ function StorefrontDetailsDialog:init()
     else
         main_action_btn = Button:new{
             text = self.patch and _("Install Patch") or _("Install"),
-            text_font_size = 20,
+            text_font_size = 18,
             background = Blitbuffer.COLOR_BLACK,
             bordersize = 0,
-            padding = sc(14),
+            padding = sc(11),
             radius = sc(4),
             width = action_btn_width,
+            show_parent = self,
             callback = function()
-                UIManager:close(self)
+                self:onClose()
                 if self.patch then
                     self.Storefront:installPatchFromRepo(self.repo, self.patch)
                 else
@@ -192,9 +210,34 @@ function StorefrontDetailsDialog:init()
         main_action_btn.label_widget.fgcolor = Blitbuffer.COLOR_WHITE
     end
 
+    -- -----------------------------------------------------------------------
     -- 4. README inline display (using HtmlBoxWidget)
+    -- -----------------------------------------------------------------------
     local readme_w = self.screen_w - sc(24)
-    local readme_h = self.screen_h - sc(340) -- leave space for headers & buttons
+    -- Measure header area heights to compute available readme space
+    local header_h = sc(8) + sc(1)   -- divider line gap
+                   + sc(12)          -- gap above title
+                   + title_label:getSize().h
+                   + sc(4)
+                   + meta_label:getSize().h
+                   + sc(12)
+                   + desc_label:getSize().h
+                   + sc(16)
+                   + (main_action_btn.getSize and main_action_btn:getSize().h or sc(44))
+                   + sc(16)
+                   + sc(1)           -- second divider
+                   + sc(12)
+    -- Back-button row height
+    local back_h   = back_btn:getSize().h + sc(8) -- back_btn + its top spacing
+
+    -- Pagination bar height (approx two-button row)
+    local pager_h  = sc(44) + sc(12) -- pagination bar + bottom gap
+
+    -- FrameContainer padding (top+bottom)
+    local frame_padding = sc(12) * 2
+
+    local readme_h = self.screen_h - frame_padding - back_h - header_h - pager_h
+    if readme_h < sc(80) then readme_h = sc(80) end
 
     local html_box = HtmlBoxWidget:new{
         dimen = Geom:new{ w = readme_w, h = readme_h },
@@ -202,7 +245,9 @@ function StorefrontDetailsDialog:init()
     }
     html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("Loading README...") .. "</p>", nil, sc(18))
 
-    -- 5. README Pagination controls
+    -- -----------------------------------------------------------------------
+    -- 5. Pagination controls
+    -- -----------------------------------------------------------------------
     local page_indicator = TextWidget:new{
         text = "1 / 1",
         face = Font:getFace("cfont", 16),
@@ -213,9 +258,11 @@ function StorefrontDetailsDialog:init()
     local next_btn
 
     local function updatePagination()
-        local current = html_box.page_number
-        local total = html_box.page_count
-        page_indicator:setText(string.format("%d / %d", current, total))
+        local current = html_box.page_number or 1
+        local total   = html_box.page_count  or 1
+        page_indicator:setText(string.format("%d / %d", current, total), readme_w / 3)
+        -- Free the cached bitmap so the widget re-renders the new page
+        html_box:freeBb()
         if current <= 1 then
             prev_btn:disable()
         else
@@ -226,7 +273,7 @@ function StorefrontDetailsDialog:init()
         else
             next_btn:enable()
         end
-        UIManager:setDirty(self)
+        UIManager:setDirty(self, "ui")
     end
 
     prev_btn = Button:new{
@@ -235,12 +282,13 @@ function StorefrontDetailsDialog:init()
         padding = sc(8),
         bordersize = sc(1),
         background = Blitbuffer.COLOR_WHITE,
+        show_parent = self,
         callback = function()
-            if html_box.page_number > 1 then
+            if html_box.page_number and html_box.page_number > 1 then
                 html_box:setPageNumber(html_box.page_number - 1)
                 updatePagination()
             end
-        end
+        end,
     }
 
     next_btn = Button:new{
@@ -249,12 +297,14 @@ function StorefrontDetailsDialog:init()
         padding = sc(8),
         bordersize = sc(1),
         background = Blitbuffer.COLOR_WHITE,
+        show_parent = self,
         callback = function()
-            if html_box.page_number < html_box.page_count then
+            local total = html_box.page_count or 1
+            if html_box.page_number and html_box.page_number < total then
                 html_box:setPageNumber(html_box.page_number + 1)
                 updatePagination()
             end
-        end
+        end,
     }
 
     prev_btn:disable()
@@ -266,11 +316,13 @@ function StorefrontDetailsDialog:init()
         HorizontalSpan:new{ width = sc(24) },
         page_indicator,
         HorizontalSpan:new{ width = sc(24) },
-        next_btn
+        next_btn,
     }
 
-    -- Trigger async README HTML load
-    local owner = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login)
+    -- -----------------------------------------------------------------------
+    -- 6. Trigger async README load
+    -- -----------------------------------------------------------------------
+    local owner     = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login)
     local repo_name = self.repo.name
     if owner and repo_name then
         NetworkMgr:runWhenOnline(function()
@@ -286,13 +338,15 @@ function StorefrontDetailsDialog:init()
             else
                 html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("No README available.") .. "</p>", nil, sc(18))
             end
-            UIManager:setDirty(self)
+            UIManager:setDirty(self, "ui")
         end)
     else
         html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("No README available.") .. "</p>", nil, sc(18))
     end
 
-    -- Layout Container
+    -- -----------------------------------------------------------------------
+    -- 7. Full-screen layout
+    -- -----------------------------------------------------------------------
     local content_group = VerticalGroup:new{
         align = "left",
         back_btn,
@@ -318,9 +372,15 @@ function StorefrontDetailsDialog:init()
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0,
         padding = sc(12),
-        dimen = Geom:new{ w = self.screen_w, h = self.screen_h },
+        width = self.screen_w,
+        height = self.screen_h,
         content_group,
     }
+end
+
+function StorefrontDetailsDialog:onClose()
+    UIManager:close(self, "ui")
+    return true
 end
 
 function StorefrontDetailsDialog:show()

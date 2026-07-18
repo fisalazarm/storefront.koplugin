@@ -33,12 +33,8 @@ function StorefrontSettingsCard.show(Storefront)
     local sh = Screen:getHeight()
     local dialog_w = math.min(sw - sc(20), sc(380))
 
-    local fs = 20
-    if G_reader_settings then
-        fs = G_reader_settings:readSetting("cre_font_size") or 20
-    end
-    local ui_font_size = math.max(14, math.min(fs, 24))
-    local title_font_size = math.max(15, math.min(fs - 2, 20))
+    local ui_font_size = 16
+    local title_font_size = 18
 
     local overlay
     local refresh
@@ -61,7 +57,7 @@ function StorefrontSettingsCard.show(Storefront)
         }
 
         local title_container = FrameContainer:new{
-            padding = sc(14),
+            padding = sc(10),
             bordersize = 0,
             title_label,
         }
@@ -95,7 +91,7 @@ function StorefrontSettingsCard.show(Storefront)
                 text = left_text,
                 face = Font:getFace("cfont", ui_font_size),
                 fgcolor = callback and Blitbuffer.COLOR_BLACK or storefront_theme.color_label_dim,
-                width = dialog_w - sc(120),
+                width = dialog_w - sc(150),
                 alignment = "left",
             }
             table.insert(row_elements, txt)
@@ -112,7 +108,7 @@ function StorefrontSettingsCard.show(Storefront)
 
             local frame = FrameContainer:new{
                 bordersize = 0,
-                padding = sc(14),
+                padding = sc(10),
                 width = dialog_w - sc(4),
                 row_content,
             }
@@ -213,12 +209,12 @@ function StorefrontSettingsCard.show(Storefront)
             fgcolor = Blitbuffer.COLOR_BLACK,
         }
         local close_row_content = HorizontalGroup:new{
-            HorizontalSpan:new{ width = (dialog_w - close_text_widget:getSize().w) / 2 - sc(14) },
+            HorizontalSpan:new{ width = (dialog_w - close_text_widget:getSize().w) / 2 - sc(10) },
             close_text_widget,
         }
         local close_frame = FrameContainer:new{
             bordersize = 0,
-            padding = sc(14),
+            padding = sc(10),
             width = dialog_w - sc(4),
             close_row_content,
         }
@@ -245,13 +241,6 @@ function StorefrontSettingsCard.show(Storefront)
         end
         table.insert(content_vg, close_btn)
 
-        -- Scrollable settings container to avoid cut-off on small screens
-        local scroll_h = math.min(sh - sc(120), sc(340))
-        local scroll_container = ScrollableContainer:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = scroll_h },
-            content_vg
-        }
-
         -- Build modal frame
         local card = FrameContainer:new{
             padding = 0,
@@ -260,7 +249,7 @@ function StorefrontSettingsCard.show(Storefront)
             color = Blitbuffer.COLOR_BLACK,
             background = storefront_theme.color_bg,
             width = dialog_w - sc(2),
-            scroll_container
+            content_vg
         }
 
         local card_outer = FrameContainer:new{

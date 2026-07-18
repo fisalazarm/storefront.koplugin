@@ -28,6 +28,7 @@ local Input = Device.input
 local StorefrontListItem = require("storefront_list_item")
 
 local StorefrontBrowserDialog = FocusManager:extend{
+    covers_fullscreen = true,
     Storefront = nil,
     title = "",
     items = nil,
@@ -428,7 +429,8 @@ function StorefrontBrowserDialog:init()
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0,
         padding = 0,
-        dimen = self.dimen:copy(),
+        width = self.screen_w,
+        height = self.screen_h,
         self.content,
     }
 
