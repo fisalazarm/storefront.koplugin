@@ -1,8 +1,8 @@
--- appstore_plugin_paths_test.lua
--- Run with: cd <extracted-koreader-dir> && ./luajit plugins/appstore.koplugin/appstore_plugin_paths_test.lua
-package.path = "plugins/appstore.koplugin/?.lua;" .. package.path
+-- Storefront_plugin_paths_test.lua
+-- Run with: cd <extracted-koreader-dir> && ./luajit plugins/storefront.koplugin/Storefront_plugin_paths_test.lua
+package.path = "plugins/storefront.koplugin/?.lua;" .. package.path
 
-local scratch = "/tmp/appstore_plugin_paths_test"
+local scratch = "/tmp/Storefront_plugin_paths_test"
 os.execute("rm -rf " .. scratch .. " && mkdir -p " .. scratch .. "/custom_a " .. scratch .. "/custom_b")
 
 local failures = 0
@@ -27,8 +27,8 @@ local function check(label, got, expected)
 end
 
 local function freshModule()
-    package.loaded["appstore_plugin_paths"] = nil
-    return require("appstore_plugin_paths")
+    package.loaded["storefront_plugin_paths"] = nil
+    return require("storefront_plugin_paths")
 end
 
 -- Scenario 1: no extra_plugin_paths configured at all.

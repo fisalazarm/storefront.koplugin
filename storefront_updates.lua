@@ -1,4 +1,4 @@
-﻿local Device = require("device")
+local Device = require("device")
 local UIManager = require("ui/uimanager")
 local Font = require("ui/font")
 local InputContainer = require("ui/widget/container/inputcontainer")
@@ -113,8 +113,8 @@ function UpdatesListItem:onTapSelect()
     return true
 end
 
-local AppStoreUpdatesDialog = FocusManager:extend{
-    appstore = nil,
+local StorefrontUpdatesDialog = FocusManager:extend{
+    Storefront = nil,
     title = "",
     items = nil,
     summary_text = nil,
@@ -126,7 +126,7 @@ local AppStoreUpdatesDialog = FocusManager:extend{
     on_close = nil,
 }
 
-function AppStoreUpdatesDialog:init()
+function StorefrontUpdatesDialog:init()
     self.show_parent = self
     self.screen_w = Device.screen:getWidth()
     self.screen_h = Device.screen:getHeight()
@@ -146,7 +146,7 @@ function AppStoreUpdatesDialog:init()
 
     self.title_bar = TitleBar:new{
         width = self.width,
-        title = self.title or _("AppStore · Updates"),
+        title = self.title or _("Storefront · Updates"),
         fullscreen = false,
         with_bottom_line = true,
         close_callback = function()
@@ -252,7 +252,7 @@ function AppStoreUpdatesDialog:init()
     end
 end
 
-function AppStoreUpdatesDialog:setItems(items)
+function StorefrontUpdatesDialog:setItems(items)
     self.items = items or {}
     self.list_group:clear()
     self._focusable_items = {}
@@ -280,7 +280,7 @@ end
 --   1) optional title bar buttons (close X)
 --   2) top control row { Check, Filter, Match, Switch }
 --   3) one row per focusable list item
-function AppStoreUpdatesDialog:_rebuildLayout()
+function StorefrontUpdatesDialog:_rebuildLayout()
     self.layout = {}
 
     if self.title_bar and self.title_bar.generateHorizontalLayout then
@@ -334,27 +334,27 @@ function AppStoreUpdatesDialog:_rebuildLayout()
     end
 end
 
-function AppStoreUpdatesDialog:setSummary(text)
+function StorefrontUpdatesDialog:setSummary(text)
     if self.summary_widget then
         self.summary_widget:setText(text or "")
         UIManager:setDirty(self)
     end
 end
 
-function AppStoreUpdatesDialog:setFilterLabel(text)
+function StorefrontUpdatesDialog:setFilterLabel(text)
     if self.filter_button and text then
         self.filter_button:setText(text)
         UIManager:setDirty(self)
     end
 end
 
-function AppStoreUpdatesDialog:onCloseWidget()
+function StorefrontUpdatesDialog:onCloseWidget()
     if self.on_close then
         self.on_close()
     end
 end
 
-function AppStoreUpdatesDialog:onClose()
+function StorefrontUpdatesDialog:onClose()
     UIManager:close(self)
     return true
 end
@@ -362,7 +362,7 @@ end
 -- After the FocusManager moves focus, scroll the inner ScrollableContainer so
 -- that the newly focused list row is visible. Title-bar / controls rows live
 -- outside the scrollable area and are skipped.
-function AppStoreUpdatesDialog:_ensureFocusedVisible()
+function StorefrontUpdatesDialog:_ensureFocusedVisible()
     local focused = self:getFocusItem()
     if not focused or not self.scroller then
         return
@@ -389,11 +389,11 @@ function AppStoreUpdatesDialog:_ensureFocusedVisible()
     end
 end
 
-function AppStoreUpdatesDialog:onFocusMove(args)
+function StorefrontUpdatesDialog:onFocusMove(args)
     local handled = FocusManager.onFocusMove(self, args)
     self:_ensureFocusedVisible()
     return handled
 end
 
-return AppStoreUpdatesDialog
+return StorefrontUpdatesDialog
 

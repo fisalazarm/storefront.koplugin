@@ -1,4 +1,4 @@
-﻿local Device = require("device")
+local Device = require("device")
 local DataStorage = require("datastorage")
 local LuaSettings = require("luasettings")
 local UIManager = require("ui/uimanager")
@@ -37,10 +37,10 @@ local _ = require("gettext")
 
 local Input = Device.input
 
-local Cache = require("appstore_cache")
-local GitHub = require("appstore_net_github")
-local RepoContent = require("appstore_repo_content")
-local InstallStore = require("appstore_installs")
+local Cache = require("storefront_cache")
+local GitHub = require("storefront_net_github")
+local RepoContent = require("storefront_repo_content")
+local InstallStore = require("storefront_installs")
 local util = require("util")
 local NetworkMgr = require("ui/network/manager")
 local socketutil = require("socketutil")
@@ -53,8 +53,8 @@ local lfs = require("libs/libkoreader-lfs")
 local json = require("json")
 local logger = require("logger")
 
-local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/appstore.lua"
-local AppStoreSettings = LuaSettings:open(SETTINGS_PATH)
+local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront.lua"
+local StorefrontSettings = LuaSettings:open(SETTINGS_PATH)
 
 local ALLOW_DELETE_UNLINKED_PLUGINS_KEY = "allow_delete_unlinked_plugins"
 local ALLOW_DELETE_UNLINKED_PATCHES_KEY = "allow_delete_unlinked_patches"
@@ -79,11 +79,11 @@ local INCLUDE_ZERO_STAR_FORKS_KEY = "include_zero_star_forks"
 local PATCH_CACHE_TTL = 10 * 60
 local DEFAULT_SORT_MODE = "stars_desc"
 
-local PluginPaths = require("appstore_plugin_paths")
+local PluginPaths = require("storefront_plugin_paths")
 local PATCHES_ROOT = DataStorage:getDataDir() .. "/patches"
 
-local AppStore = WidgetContainer:extend{
-    name = "appstore",
+local Storefront = WidgetContainer:extend{
+    name = "Storefront",
     is_doc_only = false,
     is_refreshing = false,
     browser_state = nil,
@@ -99,8 +99,13 @@ local AppStore = WidgetContainer:extend{
     readme_filter = nil,
 }
 
+require("storefront_updates_ui"):init(Storefront)
+
+local StorefrontListItem = require("storefront_list_item")
+local StorefrontBrowserDialog = require("storefront_browser_ui")
+
 local function getBrowserPageSize()
-    local v = AppStoreSettings:readSetting(BROWSER_PAGE_SIZE_KEY)
+    local v = StorefrontSettings:readSetting(BROWSER_PAGE_SIZE_KEY)
     if type(v) == "number" and v >= MIN_BROWSER_PAGE_SIZE then
         return math.min(math.floor(v), MAX_BROWSER_PAGE_SIZE)
     end
@@ -108,7 +113,7 @@ local function getBrowserPageSize()
 end
 
 local function getManagePageSize()
-    local v = AppStoreSettings:readSetting(MANAGE_PAGE_SIZE_KEY)
+    local v = StorefrontSettings:readSetting(MANAGE_PAGE_SIZE_KEY)
     if type(v) == "number" and v >= MIN_BROWSER_PAGE_SIZE then
         return math.min(math.floor(v), MAX_BROWSER_PAGE_SIZE)
     end
@@ -128,12 +133,12 @@ local function showRestartConfirmation(message)
 end
 
 local function getIgnoredReleases()
-    return AppStoreSettings:readSetting(IGNORED_RELEASES_KEY) or {}
+    return StorefrontSettings:readSetting(IGNORED_RELEASES_KEY) or {}
 end
 
 local function saveIgnoredReleases(ignored_releases)
-    AppStoreSettings:saveSetting(IGNORED_RELEASES_KEY, ignored_releases)
-    AppStoreSettings:flush()
+    StorefrontSettings:saveSetting(IGNORED_RELEASES_KEY, ignored_releases)
+    StorefrontSettings:flush()
 end
 
 local function ignoreRelease(owner, repo_name, version)
@@ -172,13 +177,6 @@ local function isReleaseIgnored(owner, repo_name, version)
     return ignored_version == version
 end
 
-local AppStoreListItem = InputContainer:extend{
-    entry = nil,
-    width = nil,
-    dialog = nil,
-}
-
-local AppStoreBrowserDialog
 
 local extractRepoOwner
 local ensureCacheDir
@@ -319,7 +317,7 @@ local function makeScrollableTextBox(text)
     }
 end
 
-function AppStore:refreshPatchUpdates()
+function Storefront:refreshPatchUpdates()
     local records = getPatchRecordsMap()
     local tracked = {}
     local installed = listInstalledPatches()
@@ -349,7 +347,7 @@ function AppStore:refreshPatchUpdates()
     end)
 end
 
-function AppStore:_refreshPatchUpdatesInternal(records)
+function Storefront:_refreshPatchUpdatesInternal(records)
     records = records or {}
     self:ensurePatchUpdatesState()
     local single_context = self.patch_updates_state.single_check_context
@@ -701,7 +699,7 @@ local function buildPatchSummary(remote_info)
     return summary
 end
 
-function AppStore:buildPatchUpdateItems(summary)
+function Storefront:buildPatchUpdateItems(summary)
     self:ensurePatchUpdatesState()
     summary = summary or self:collectPatchUpdateSummary()
     local entries = {}
@@ -1107,7 +1105,7 @@ end
 
 local function listInstalledPlugins()
     local plugins = {}
-    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+    local hidden_paths = StorefrontSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
     for _, root in ipairs(PluginPaths.getLookupPaths()) do
         if lfs.attributes(root, "mode") == "directory" and not PluginPaths.isPathHidden(root, hidden_paths) then
             for entry in lfs.dir(root) do
@@ -1168,7 +1166,7 @@ local function getInstallRecordsMap()
     return records
 end
 
-function AppStore:ensureUpdatesState()
+function Storefront:ensureUpdatesState()
     if not self.updates_state then
         self.updates_state = {}
     end
@@ -1178,7 +1176,7 @@ function AppStore:ensureUpdatesState()
     self.updates_state.page = self.updates_state.page or 1
 end
 
-function AppStore:ensurePatchUpdatesState()
+function Storefront:ensurePatchUpdatesState()
     if not self.patch_updates_state then
         self.patch_updates_state = {}
     end
@@ -1194,7 +1192,7 @@ end
 -- nil just set here, and the rebuilt list would reopen scrolled past its
 -- first rows. Used whenever a filter/sort/page-size change invalidates the
 -- current view (see call sites in showPluginFilterDialog/showPatchFilterDialog).
-function AppStore:resetPageAndScroll(state, menu)
+function Storefront:resetPageAndScroll(state, menu)
     state.page = 1
     state.scroll_offset = nil
     if menu and menu.resetScroll then
@@ -1202,12 +1200,12 @@ function AppStore:resetPageAndScroll(state, menu)
     end
 end
 
-function AppStore:collectPatchUpdateSummary()
+function Storefront:collectPatchUpdateSummary()
     self:ensurePatchUpdatesState()
     return buildPatchSummary(self.patch_updates_state.remote_info)
 end
 
-function AppStore:getPatchUpdatesSummaryText(summary)
+function Storefront:getPatchUpdatesSummaryText(summary)
     summary = summary or self:collectPatchUpdateSummary()
     local parts = {
         string.format(_("Tracked: %d"), summary.tracked or 0),
@@ -1220,7 +1218,7 @@ function AppStore:getPatchUpdatesSummaryText(summary)
     return table.concat(parts, " • ")
 end
 
-function AppStore:collectUpdateSummary()
+function Storefront:collectUpdateSummary()
     self:ensureUpdatesState()
     local records = getInstallRecordsMap()
     local installed = listInstalledPlugins()
@@ -1308,7 +1306,7 @@ function AppStore:collectUpdateSummary()
     return summary
 end
 
-function AppStore:getUpdatesSummaryText(summary)
+function Storefront:getUpdatesSummaryText(summary)
     summary = summary or self:collectUpdateSummary()
     local parts = {
         string.format(_("Tracked: %d"), summary.tracked or 0),
@@ -1321,7 +1319,7 @@ function AppStore:getUpdatesSummaryText(summary)
     return table.concat(parts, " • ")
 end
 
-function AppStore:buildUpdateItems(summary)
+function Storefront:buildUpdateItems(summary)
     self:ensureUpdatesState()
     summary = summary or self:collectUpdateSummary()
     local entries = {}
@@ -1444,7 +1442,7 @@ function AppStore:buildUpdateItems(summary)
     return entries
 end
 
-function AppStore:buildUpdateBrowserItems(summary)
+function Storefront:buildUpdateBrowserItems(summary)
     self:ensureUpdatesState()
     summary = summary or self:collectUpdateSummary()
     local items = {}
@@ -1529,7 +1527,7 @@ function AppStore:buildUpdateBrowserItems(summary)
     return items, total_pages
 end
 
-function AppStore:buildPatchUpdateBrowserItems(summary)
+function Storefront:buildPatchUpdateBrowserItems(summary)
     self:ensurePatchUpdatesState()
     summary = summary or self:collectPatchUpdateSummary()
     local items = {}
@@ -1610,7 +1608,7 @@ function AppStore:buildPatchUpdateBrowserItems(summary)
     return items, total_pages
 end
 
-function AppStore:updateUpdatesDialog()
+function Storefront:updateUpdatesDialog()
     if not self.updates_menu then
         return
     end
@@ -1625,7 +1623,7 @@ end
 -- Flip the installed-plugins dialog to another page: reset scroll to the top
 -- (do not save the current offset) and rebuild. The builder clamps the page to
 -- the valid range, so out-of-range requests settle on the nearest edge.
-function AppStore:gotoUpdatesPage(page_num)
+function Storefront:gotoUpdatesPage(page_num)
     self:ensureUpdatesState()
     local target = math.max(1, page_num or 1)
     if target == self.updates_state.page then
@@ -1648,7 +1646,7 @@ function AppStore:gotoUpdatesPage(page_num)
     self:showUpdatesDialog()
 end
 
-function AppStore:closeUpdatesDialog(skip_scroll_save)
+function Storefront:closeUpdatesDialog(skip_scroll_save)
     if self.updates_menu then
         if not skip_scroll_save and self.updates_menu.getScrollOffset then
             self:ensureUpdatesState()
@@ -1659,7 +1657,7 @@ function AppStore:closeUpdatesDialog(skip_scroll_save)
     end
 end
 
-function AppStore:closePatchUpdatesDialog(skip_scroll_save)
+function Storefront:closePatchUpdatesDialog(skip_scroll_save)
     if self.patch_updates_menu then
         if not skip_scroll_save and self.patch_updates_menu.getScrollOffset then
             self:ensurePatchUpdatesState()
@@ -1670,8 +1668,8 @@ function AppStore:closePatchUpdatesDialog(skip_scroll_save)
     end
 end
 
-function AppStore:showManagePluginPathsDialog()
-    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+function Storefront:showManagePluginPathsDialog()
+    local hidden_paths = StorefrontSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
     local lookup_paths = PluginPaths.getLookupPaths()
 
     local button_dialog
@@ -1685,7 +1683,7 @@ function AppStore:showManagePluginPathsDialog()
                 text = checkbox_text .. this_path,
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
-                    local current_hidden = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+                    local current_hidden = StorefrontSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
                     local new_hidden = {}
                     local was_hidden = false
                     for _, h in ipairs(current_hidden) do
@@ -1698,8 +1696,8 @@ function AppStore:showManagePluginPathsDialog()
                     if not was_hidden then
                         table.insert(new_hidden, this_path)
                     end
-                    AppStoreSettings:saveSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY, new_hidden)
-                    AppStoreSettings:flush()
+                    StorefrontSettings:saveSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY, new_hidden)
+                    StorefrontSettings:flush()
                     UIManager:close(button_dialog)
                     UIManager:nextTick(function()
                         self:showManagePluginPathsDialog()
@@ -1722,7 +1720,7 @@ function AppStore:showManagePluginPathsDialog()
     })
 
     button_dialog = ButtonDialog:new{
-        title = _("Manage plugin paths\n\nHiding a path only affects what AppStore shows/manages here. KOReader will still load plugins from it."),
+        title = _("Manage plugin paths\n\nHiding a path only affects what Storefront shows/manages here. KOReader will still load plugins from it."),
         title_align = "center",
         buttons = buttons,
         -- Back-key / tap-outside dismissal doesn't go through the "Close"
@@ -1737,8 +1735,8 @@ function AppStore:showManagePluginPathsDialog()
     UIManager:show(button_dialog)
 end
 
-function AppStore:showPluginUpdatesSettings()
-    local allow_delete_unlinked = AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
+function Storefront:showPluginUpdatesSettings()
+    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
     local checkbox_text = allow_delete_unlinked and "☑ " or "☐ "
     local button_dialog
     local buttons = {
@@ -1747,9 +1745,9 @@ function AppStore:showPluginUpdatesSettings()
                 text = checkbox_text .. _("Allow delete unlinked plugins"),
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
-                    local new_value = not (AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false)
-                    AppStoreSettings:saveSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY, new_value)
-                    AppStoreSettings:flush()
+                    local new_value = not (StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false)
+                    StorefrontSettings:saveSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY, new_value)
+                    StorefrontSettings:flush()
                     UIManager:close(button_dialog)
                     UIManager:show(InfoMessage:new{
                         text = new_value and _("Unlinked plugins can now be deleted") or _("Unlinked plugins cannot be deleted"),
@@ -1789,8 +1787,8 @@ function AppStore:showPluginUpdatesSettings()
                     value_max = MAX_BROWSER_PAGE_SIZE,
                     ok_text = _("Set"),
                     callback = function(spin)
-                        AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
-                        AppStoreSettings:flush()
+                        StorefrontSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
+                        StorefrontSettings:flush()
                         self:ensureUpdatesState()
                         self.updates_state.page = 1
                         self.updates_state.scroll_offset = nil
@@ -1824,16 +1822,16 @@ function AppStore:showPluginUpdatesSettings()
     UIManager:show(button_dialog)
 end
 
-function AppStore:showUpdatesDialog()
+function Storefront:showUpdatesDialog()
     self:ensureUpdatesState()
     local summary = self:collectUpdateSummary()
     local entries, total_pages = self:buildUpdateBrowserItems(summary)
     local initial_focus = self.updates_focus_hint
     self.updates_focus_hint = nil
-    local dialog = AppStoreBrowserDialog:new{
+    local dialog = StorefrontBrowserDialog:new{
         title = _("App Store · Installed plugins"),
         items = entries,
-        appstore = self,
+        Storefront = self,
         page = self.updates_state.page or 1,
         total_pages = total_pages,
         initial_focus = initial_focus,
@@ -1861,7 +1859,7 @@ function AppStore:showUpdatesDialog()
         dialog:setScrollOffset(self.updates_state.scroll_offset)
     end
     -- Full (flashing) e-ink refresh by default: this dialog usually replaces
-    -- another full-screen AppStore dialog (the browser, settings) and on devices
+    -- another full-screen Storefront dialog (the browser, settings) and on devices
     -- that default to partial refresh (e.g. Kobo) the old frame ghosts through
     -- otherwise. Old Kindle controllers flash on every update, so this is
     -- effectively a no-op there. gotoUpdatesPage narrows this to a lighter
@@ -1871,8 +1869,8 @@ function AppStore:showUpdatesDialog()
     UIManager:setDirty(dialog, refresh_mode)
 end
 
-function AppStore:showPatchUpdatesSettings()
-    local allow_delete_unlinked = AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
+function Storefront:showPatchUpdatesSettings()
+    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
     local checkbox_text = allow_delete_unlinked and "☑ " or "☐ "
     local button_dialog
     local buttons = {
@@ -1881,9 +1879,9 @@ function AppStore:showPatchUpdatesSettings()
                 text = checkbox_text .. _("Allow delete unlinked patches"),
                 background = Blitbuffer.COLOR_WHITE,
                 callback = function()
-                    local new_value = not (AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false)
-                    AppStoreSettings:saveSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY, new_value)
-                    AppStoreSettings:flush()
+                    local new_value = not (StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false)
+                    StorefrontSettings:saveSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY, new_value)
+                    StorefrontSettings:flush()
                     UIManager:close(button_dialog)
                     UIManager:show(InfoMessage:new{
                         text = new_value and _("Unlinked patches can now be deleted") or _("Unlinked patches cannot be deleted"),
@@ -1908,8 +1906,8 @@ function AppStore:showPatchUpdatesSettings()
                         value_max = MAX_BROWSER_PAGE_SIZE,
                         ok_text = _("Set"),
                         callback = function(spin)
-                            AppStoreSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
-                            AppStoreSettings:flush()
+                            StorefrontSettings:saveSetting(MANAGE_PAGE_SIZE_KEY, spin.value)
+                            StorefrontSettings:flush()
                             self:ensurePatchUpdatesState()
                             self.patch_updates_state.page = 1
                             self.patch_updates_state.scroll_offset = nil
@@ -1943,7 +1941,7 @@ function AppStore:showPatchUpdatesSettings()
     UIManager:show(button_dialog)
 end
 
-function AppStore:showPatchUpdatesDialog()
+function Storefront:showPatchUpdatesDialog()
     self:ensurePatchUpdatesState()
     local prev_scroll = self.patch_updates_state.scroll_offset
     if self.patch_updates_menu and self.patch_updates_menu.getScrollOffset then
@@ -1955,10 +1953,10 @@ function AppStore:showPatchUpdatesDialog()
     local entries, total_pages = self:buildPatchUpdateBrowserItems(summary)
     local initial_focus = self.patch_updates_focus_hint
     self.patch_updates_focus_hint = nil
-    local dialog = AppStoreBrowserDialog:new{
+    local dialog = StorefrontBrowserDialog:new{
         title = _("App Store · Installed patches"),
         items = entries,
-        appstore = self,
+        Storefront = self,
         page = self.patch_updates_state.page or 1,
         total_pages = total_pages,
         initial_focus = initial_focus,
@@ -1993,7 +1991,7 @@ function AppStore:showPatchUpdatesDialog()
     UIManager:setDirty(dialog, refresh_mode)
 end
 
-function AppStore:updatePatchUpdatesDialog()
+function Storefront:updatePatchUpdatesDialog()
     if not self.patch_updates_menu then
         return
     end
@@ -2005,7 +2003,7 @@ function AppStore:updatePatchUpdatesDialog()
     self:showPatchUpdatesDialog()
 end
 
-function AppStore:gotoPatchUpdatesPage(page_num)
+function Storefront:gotoPatchUpdatesPage(page_num)
     self:ensurePatchUpdatesState()
     local target = math.max(1, page_num or 1)
     if target == self.patch_updates_state.page then
@@ -2027,19 +2025,19 @@ function AppStore:gotoPatchUpdatesPage(page_num)
     self:showPatchUpdatesDialog()
 end
 
-function AppStore:toggleUpdatesFilter()
+function Storefront:toggleUpdatesFilter()
     self:ensureUpdatesState()
     self.updates_state.filter_only_outdated = not self.updates_state.filter_only_outdated
     self:updateUpdatesDialog()
 end
 
-function AppStore:toggleLinkedFilter()
+function Storefront:toggleLinkedFilter()
     self:ensureUpdatesState()
     self.updates_state.filter_only_linked = not self.updates_state.filter_only_linked
     self:updateUpdatesDialog()
 end
 
-function AppStore:showPluginFilterDialog()
+function Storefront:showPluginFilterDialog()
     self:ensureUpdatesState()
     local current_outdated = self.updates_state.filter_only_outdated
     local current_linked = self.updates_state.filter_only_linked
@@ -2115,7 +2113,7 @@ function AppStore:showPluginFilterDialog()
     UIManager:show(self.plugin_filter_dialog)
 end
 
-function AppStore:togglePatchUpdatesFilter()
+function Storefront:togglePatchUpdatesFilter()
     self:ensurePatchUpdatesState()
     self.patch_updates_state.filter_only_outdated = not self.patch_updates_state.filter_only_outdated
     if self.patch_updates_menu then
@@ -2125,7 +2123,7 @@ function AppStore:togglePatchUpdatesFilter()
     end
 end
 
-function AppStore:togglePatchLinkedFilter()
+function Storefront:togglePatchLinkedFilter()
     self:ensurePatchUpdatesState()
     self.patch_updates_state.filter_only_linked = not self.patch_updates_state.filter_only_linked
     if self.patch_updates_menu then
@@ -2135,7 +2133,7 @@ function AppStore:togglePatchLinkedFilter()
     end
 end
 
-function AppStore:showPatchFilterDialog()
+function Storefront:showPatchFilterDialog()
     self:ensurePatchUpdatesState()
     local current_outdated = self.patch_updates_state.filter_only_outdated
     local current_linked = self.patch_updates_state.filter_only_linked
@@ -2223,7 +2221,7 @@ function AppStore:showPatchFilterDialog()
     UIManager:show(self.patch_filter_dialog)
 end
 
-function AppStore:checkAllUpdates()
+function Storefront:checkAllUpdates()
     local records = getInstallRecordsMap()
     local tracked = {}
     local installed = listInstalledPlugins()
@@ -2247,7 +2245,7 @@ function AppStore:checkAllUpdates()
         local Trapper = require("ui/trapper")
         local http = require("socket.http")
         local ltn12 = require("ltn12")
-        local GitHub = require("appstore_net_github")
+        local GitHub = require("storefront_net_github")
 
         local function parseGitHubTimestampWorker(ts)
             if type(ts) ~= "string" or ts == "" then
@@ -2278,7 +2276,7 @@ function AppStore:checkAllUpdates()
                 url = url,
                 sink = ltn12.sink.table(response),
                 headers = {
-                    ["User-Agent"] = "KOReader-AppStore",
+                    ["User-Agent"] = "KOReader-Storefront",
                     ["Accept"] = "text/plain",
                 },
             }
@@ -2461,7 +2459,7 @@ function AppStore:checkAllUpdates()
     end)
 end
 
-function AppStore:_checkAllUpdatesInternal(records)
+function Storefront:_checkAllUpdatesInternal(records)
     self:ensureUpdatesState()
     local progress = InfoMessage:new{ text = _("Checking plugin updates…"), timeout = 0 }
     UIManager:show(progress)
@@ -2492,7 +2490,7 @@ function AppStore:_checkAllUpdatesInternal(records)
 end
 
 local function findLatestStableRelease(owner, repo)
-    local GitHub = require("appstore_net_github")
+    local GitHub = require("storefront_net_github")
     
     local latest, err = GitHub.fetchLatestRelease(owner, repo)
     
@@ -2524,7 +2522,7 @@ local function findLatestStableRelease(owner, repo)
     return nil, "No stable release found"
 end
 
-function AppStore:fetchRemoteVersionForRecord(record)
+function Storefront:fetchRemoteVersionForRecord(record)
     if not record or not record.owner or not record.repo then
         return nil, 0, _("Not matched with a repository.")
     end
@@ -2599,7 +2597,7 @@ function AppStore:fetchRemoteVersionForRecord(record)
     return nil, remote_repo_ts, last_err or _("Remote version not found.")
 end
 
-function AppStore:getUnmatchedPlugins()
+function Storefront:getUnmatchedPlugins()
     local records = getInstallRecordsMap()
     local installed = listInstalledPlugins()
     local unmatched = {}
@@ -2612,7 +2610,7 @@ function AppStore:getUnmatchedPlugins()
     return unmatched
 end
 
-function AppStore:startMatchFlow()
+function Storefront:startMatchFlow()
     local unmatched = self:getUnmatchedPlugins()
     if #unmatched == 0 then
         UIManager:show(InfoMessage:new{ text = _("All plugins are already matched."), timeout = 4 })
@@ -2653,7 +2651,7 @@ function AppStore:startMatchFlow()
     UIManager:show(dialog)
 end
 
-function AppStore:startMatchFlowForPlugin(plugin)
+function Storefront:startMatchFlowForPlugin(plugin)
     if not plugin then
         return
     end
@@ -2676,7 +2674,7 @@ function AppStore:startMatchFlowForPlugin(plugin)
     self:showBrowser("plugin")
 end
 
-function AppStore:matchPluginWithRepo(plugin, repo)
+function Storefront:matchPluginWithRepo(plugin, repo)
     if not plugin or not repo then
         return
     end
@@ -2706,7 +2704,7 @@ function AppStore:matchPluginWithRepo(plugin, repo)
     end
 end
 
-function AppStore:promptManualMatchForPlugin(plugin)
+function Storefront:promptManualMatchForPlugin(plugin)
     if not plugin then
         return
     end
@@ -2759,7 +2757,7 @@ function AppStore:promptManualMatchForPlugin(plugin)
     UIManager:show(dialog)
 end
 
-function AppStore:verifyAndMatchPluginWithManualRepo(plugin, owner, repo_name)
+function Storefront:verifyAndMatchPluginWithManualRepo(plugin, owner, repo_name)
     if not plugin or not owner or not repo_name then
         return
     end
@@ -2798,7 +2796,7 @@ function AppStore:verifyAndMatchPluginWithManualRepo(plugin, owner, repo_name)
     end)
 end
 
-function AppStore:promptUpdateAction(plugin, record)
+function Storefront:promptUpdateAction(plugin, record)
     local lines = {
         string.format("%s (%s)", plugin.name or plugin.dirname, plugin.dirname),
         string.format(_("Local version: %s"), plugin.version or _("unknown")),
@@ -2938,7 +2936,7 @@ function AppStore:promptUpdateAction(plugin, record)
     UIManager:show(info_box)
 end
 
-function AppStore:promptPatchUpdateAction(patch_item)
+function Storefront:promptPatchUpdateAction(patch_item)
     if not patch_item or not patch_item.patch then
         return
     end
@@ -3120,14 +3118,14 @@ end
 
 -- ─── Modify Plugin ────────────────────────────────────────────────────────────
 
-function AppStore:modifyPlugin(plugin)
+function Storefront:modifyPlugin(plugin)
     if not plugin or not plugin.dirname then
         return
     end
     self:showPluginFilesDialog(plugin, true)
 end
 
-function AppStore:showPluginFilesDialog(plugin, filter_config_only)
+function Storefront:showPluginFilesDialog(plugin, filter_config_only)
     local plugin_path = plugin.path
     if lfs.attributes(plugin_path, "mode") ~= "directory" then
         UIManager:show(InfoMessage:new{
@@ -3232,7 +3230,7 @@ function AppStore:showPluginFilesDialog(plugin, filter_config_only)
     UIManager:show(dialog)
 end
 
-function AppStore:showPluginFileActionDialog(plugin, filepath, filename, filter_config_only)
+function Storefront:showPluginFileActionDialog(plugin, filepath, filename, filter_config_only)
     local dialog
     local buttons = {}
 
@@ -3440,7 +3438,7 @@ end
 
 -- ─── End Modify Plugin ────────────────────────────────────────────────────────
 
-function AppStore:disablePlugin(dirname)
+function Storefront:disablePlugin(dirname)
     if not dirname or dirname == "" then
         return false
     end
@@ -3451,7 +3449,7 @@ function AppStore:disablePlugin(dirname)
     return true
 end
 
-function AppStore:enablePlugin(dirname)
+function Storefront:enablePlugin(dirname)
     if not dirname or dirname == "" then
         return false
     end
@@ -3462,7 +3460,7 @@ function AppStore:enablePlugin(dirname)
     return true
 end
 
-function AppStore:performPluginDeletion(dirname, record, plugin_instance_for_settings)
+function Storefront:performPluginDeletion(dirname, record, plugin_instance_for_settings)
     local plugin = findInstalledPlugin(dirname)
     local display_name = plugin and (plugin.name or plugin.dirname) or dirname
 
@@ -3501,14 +3499,14 @@ function AppStore:performPluginDeletion(dirname, record, plugin_instance_for_set
     end
 end
 
-function AppStore:deletePlugin(dirname, record)
+function Storefront:deletePlugin(dirname, record)
     if not dirname or dirname == "" then
         return
     end
     local plugin = findInstalledPlugin(dirname)
     local display_name = plugin and (plugin.name or plugin.dirname) or dirname
     local is_linked = record and record.owner and record.repo
-    local allow_delete_unlinked = AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
+    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
     
     if not is_linked and not allow_delete_unlinked then
         UIManager:show(InfoMessage:new{
@@ -3559,7 +3557,7 @@ function AppStore:deletePlugin(dirname, record)
     UIManager:show(confirm_box)
 end
 
-function AppStore:disablePatch(filename)
+function Storefront:disablePatch(filename)
     if not filename or filename == "" then
         return false
     end
@@ -3576,7 +3574,7 @@ function AppStore:disablePatch(filename)
     return true
 end
 
-function AppStore:enablePatch(filename)
+function Storefront:enablePatch(filename)
     if not filename or filename == "" then
         return false
     end
@@ -3593,13 +3591,13 @@ function AppStore:enablePatch(filename)
     return true
 end
 
-function AppStore:deletePatch(filename, record)
+function Storefront:deletePatch(filename, record)
     if not filename or filename == "" then
         return
     end
     local display_name = filename
     local is_linked = record and record.owner and record.repo
-    local allow_delete_unlinked = AppStoreSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
+    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
     
     if not is_linked and not allow_delete_unlinked then
         UIManager:show(InfoMessage:new{
@@ -3636,7 +3634,7 @@ function AppStore:deletePatch(filename, record)
     UIManager:show(confirm_box)
 end
 
-function AppStore:checkSinglePlugin(record)
+function Storefront:checkSinglePlugin(record)
     if not record then
         return
     end
@@ -3645,7 +3643,7 @@ function AppStore:checkSinglePlugin(record)
     end)
 end
 
-function AppStore:checkSinglePatch(record)
+function Storefront:checkSinglePatch(record)
     if not record then
         return
     end
@@ -3662,7 +3660,7 @@ function AppStore:checkSinglePatch(record)
     UIManager:show(InfoMessage:new{ text = string.format(_("Checking %s…"), patch_name), timeout = 3 })
 end
 
-function AppStore:_checkSinglePluginInternal(record)
+function Storefront:_checkSinglePluginInternal(record)
     self:ensureUpdatesState()
     local plugin_name = record.dirname or _("plugin")
     local progress = InfoMessage:new{ text = string.format(_("Checking %s…"), plugin_name), timeout = 0 }
@@ -3703,7 +3701,7 @@ function AppStore:_checkSinglePluginInternal(record)
     end
 end
 
-function AppStore:updatePluginFromRecord(record)
+function Storefront:updatePluginFromRecord(record)
     local descriptor = buildRepoDescriptorFromRecord(record)
     if not descriptor then
         UIManager:show(InfoMessage:new{ text = _("Missing repository info for update."), timeout = 4 })
@@ -3721,7 +3719,7 @@ function AppStore:updatePluginFromRecord(record)
     self:promptPluginInstallOptions(descriptor)
 end
 
-function AppStore:updatePatchFromRecord(record)
+function Storefront:updatePatchFromRecord(record)
     if not record or not record.owner or not record.repo or not record.path then
         UIManager:show(InfoMessage:new{ text = _("Missing repository info for patch update."), timeout = 4 })
         return
@@ -3748,11 +3746,11 @@ function AppStore:updatePatchFromRecord(record)
     self:installPatchFromRepo(repo, patch_entry)
 end
 
-function AppStore:cancelMatchContext()
+function Storefront:cancelMatchContext()
     self.match_context = nil
 end
 
-function AppStore:startPatchMatchFlow(patch)
+function Storefront:startPatchMatchFlow(patch)
     if type(patch) == "string" then
         patch = findInstalledPatch(patch)
     end
@@ -3792,7 +3790,7 @@ function AppStore:startPatchMatchFlow(patch)
     self:showBrowser("patch")
 end
 
-function AppStore:matchPatchWithRepo(patch, repo, patch_entry)
+function Storefront:matchPatchWithRepo(patch, repo, patch_entry)
     if type(patch) == "string" then
         patch = findInstalledPatch(patch)
     end
@@ -3827,7 +3825,7 @@ function AppStore:matchPatchWithRepo(patch, repo, patch_entry)
     end
 end
 
-function AppStore:promptManualMatchForPatch(patch)
+function Storefront:promptManualMatchForPatch(patch)
     if type(patch) == "string" then
         patch = findInstalledPatch(patch)
     end
@@ -3883,7 +3881,7 @@ function AppStore:promptManualMatchForPatch(patch)
     UIManager:show(dialog)
 end
 
-function AppStore:verifyAndMatchPatchWithManualRepo(patch, owner, repo_name)
+function Storefront:verifyAndMatchPatchWithManualRepo(patch, owner, repo_name)
     if type(patch) == "string" then
         patch = findInstalledPatch(patch)
     end
@@ -3937,7 +3935,7 @@ function AppStore:verifyAndMatchPatchWithManualRepo(patch, owner, repo_name)
     end)
 end
 
-function AppStore:showPatchSelectionDialog(patch, repo, entries)
+function Storefront:showPatchSelectionDialog(patch, repo, entries)
     if not patch or not repo or not entries or #entries == 0 then
         return
     end
@@ -3985,7 +3983,7 @@ local function getRecordedInstall(dirname)
     return InstallStore.get(dirname)
 end
 
-function AppStore:updateInstallRecord(dirname, fields)
+function Storefront:updateInstallRecord(dirname, fields)
     if not dirname or dirname == "" or type(fields) ~= "table" then
         return
     end
@@ -3998,7 +3996,7 @@ function AppStore:updateInstallRecord(dirname, fields)
     InstallStore.upsert(dirname, record)
 end
 
-function AppStore:updatePatchRecord(filename, fields)
+function Storefront:updatePatchRecord(filename, fields)
     if not filename or filename == "" or type(fields) ~= "table" then
         return
     end
@@ -4012,7 +4010,7 @@ function AppStore:updatePatchRecord(filename, fields)
     InstallStore.upsertPatch(filename, record)
 end
 
-function AppStore:rememberPatchInstall(filename, repo, patch_info)
+function Storefront:rememberPatchInstall(filename, repo, patch_info)
     if not filename or filename == "" then
         return
     end
@@ -4025,7 +4023,7 @@ function AppStore:rememberPatchInstall(filename, repo, patch_info)
     end
 end
 
-function AppStore:updateSinglePatchStatus(filename, record)
+function Storefront:updateSinglePatchStatus(filename, record)
     if not filename or filename == "" then
         return
     end
@@ -4056,7 +4054,7 @@ end
 
 local derivePluginRepoPath
 
-function AppStore:rememberInstall(info, repo)
+function Storefront:rememberInstall(info, repo)
     if not info or not info.plugin_dirname then
         return
     end
@@ -4139,7 +4137,7 @@ fetchGitHubRaw = function(owner, repo_name, branch, path)
         url = url,
         sink = ltn12.sink.table(response),
         headers = {
-            ["User-Agent"] = "KOReader-AppStore",
+            ["User-Agent"] = "KOReader-Storefront",
             ["Accept"] = "text/plain",
         },
     }
@@ -4246,7 +4244,7 @@ local function normalizeDescription(value)
     return value
 end
 
-function AppStore:resetFiltersForRefresh()
+function Storefront:resetFiltersForRefresh()
     self:ensureBrowserState()
     self.browser_state.search_text = ""
     self.browser_state.owner = ""
@@ -4258,80 +4256,7 @@ function AppStore:resetFiltersForRefresh()
     self:saveBrowserState()
 end
 
-function AppStoreListItem:init()
-    local entry = self.entry or {}
-    self.entry = entry
-    local content_width = self.width or math.floor(math.min(Device.screen:getWidth(), Device.screen:getHeight()) * 0.9)
-    local text_color = (entry.dim or entry.select_enabled == false) and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
-    local face = Font:getFace("smallinfofont")
-    local line_height_px = math.floor(face.size * 1.4)
-    local max_height = line_height_px * 3
-    local content_inner = content_width - 2 * Size.padding.default
-    -- "Installed" mark: a large checkmark pinned to the right margin (normally
-    -- empty). Build it first so the text area can reserve room for it instead of
-    -- being drawn underneath it (long names would otherwise hide behind the ✓).
-    local check, mark_reserve
-    if entry.installed and content_inner > 0 then
-        -- face.size is already DPI-scaled and Font:getFace() scales again, so the
-        -- 2x face is derived from the unscaled size (orig_size) to avoid scaling
-        -- twice, which would oversize the mark on high-DPI screens.
-        local base_size = face.orig_size or face.size or 18
-        check = TextWidget:new{
-            text = "✓",
-            face = Font:getFace("smallinfofont", base_size * 2),
-            fgcolor = text_color,
-        }
-        -- Never let the mark claim more than half the row, so the text keeps
-        -- some usable width even on very narrow layouts or oversized fonts.
-        mark_reserve = math.min(check:getSize().w + Size.padding.default, math.floor(content_inner / 2))
-    end
-    local text_box = TextBoxWidget:new{
-        text = entry.text or "",
-        width = math.max(1, content_inner - (mark_reserve or 0)),
-        face = face,
-        fgcolor = text_color,
-        alignment = "left",
-        justified = false,
-        height = max_height,
-        height_overflow_show_ellipsis = true,
-        height_adjust = true,
-    }
-    local row_widget = text_box
-    if check then
-        local row_h = text_box:getSize().h
-        row_widget = OverlapGroup:new{
-            dimen = Geom:new{ w = content_inner, h = row_h },
-            text_box,
-            RightContainer:new{
-                dimen = Geom:new{ w = content_inner, h = row_h },
-                check,
-            },
-        }
-    end
-    -- Tappable control rows (Filter / Sort and the managers' action rows) get a
-    -- visible border so they read as controls rather than plain headings. Real
-    -- list entries and non-tappable info rows stay borderless.
-    local is_control = entry.callback and not entry.is_entry and entry.select_enabled ~= false
-    self.frame = FrameContainer:new{
-        padding = Size.padding.default,
-        bordersize = is_control and Size.border.button or 0,
-        radius = is_control and Size.radius.button or nil,
-        row_widget,
-    }
-    self[1] = self.frame
-    self.dimen = self.frame:getSize()
-
-    if entry.callback or entry.hold_callback then
-        local tap_range = function()
-            return Geom:new{
-                x = self.dimen.x,
-                y = self.dimen.y,
-                w = self.dimen.w,
-                h = self.dimen.h,
-            }
-        end
-
-function AppStore:promptPatchAction(repo, patch)
+function Storefront:promptPatchAction(repo, patch)
     local repo_title = repo.full_name or repo.name or _("Repository")
     local details = {
         string.format(_("Patch: %s"), patch.filename),
@@ -4373,45 +4298,24 @@ function AppStore:promptPatchAction(repo, patch)
             },
         }
     else
-        other_buttons = {
-            {
-                {
-                    text = _("Install patch"),
-                    is_enter_default = true,
-                    callback = function()
-                        UIManager:close(dialog)
-                        self:installPatchFromRepo(repo, patch)
-                    end,
-                },
-                {
-                    text = _("View README"),
-                    callback = function()
-                        UIManager:close(dialog)
-                        self:showReadme(repo)
-                    end,
-                },
-            },
+        local DetailsDialog = require("storefront_details_dialog")
+        local details_dialog = DetailsDialog:new{
+            Storefront = self,
+            repo = repo,
+            patch = patch,
+            kind = "patch",
         }
+        details_dialog:show()
     end
-
-    dialog = ConfirmBox:new{
-        text = repo_title,
-        cancel_text = _("Close"),
-        no_ok_button = true,
-        custom_content = makeTextBox(table.concat(details, "\n")),
-        other_buttons_first = true,
-        other_buttons = other_buttons,
-    }
-    UIManager:show(dialog)
 end
 
-function AppStore:installPatchFromRepo(repo, patch)
+function Storefront:installPatchFromRepo(repo, patch)
     NetworkMgr:runWhenOnline(function()
         self:_installPatchFromRepoInternal(repo, patch)
     end)
 end
 
-function AppStore:_installPatchFromRepoInternal(repo, patch)
+function Storefront:_installPatchFromRepoInternal(repo, patch)
     local owner = extractRepoOwner(repo)
     if not owner or not repo.name then
         UIManager:show(InfoMessage:new{ text = _("Missing repository metadata for patch install."), timeout = 4 })
@@ -4470,659 +4374,9 @@ function AppStore:_installPatchFromRepoInternal(repo, patch)
         self:updateSinglePatchStatus(patch.filename, stored_record)
     end
 end
-        self.ges_events = {
-            AppStoreTap = {
-                GestureRange:new{
-                    ges = "tap",
-                    range = tap_range,
-                },
-            },
-        }
-        if entry.hold_callback then
-            self.ges_events.AppStoreHold = {
-                GestureRange:new{
-                    ges = "hold",
-                    range = tap_range,
-                },
-            }
-        end
-    end
-end
 
-function AppStoreListItem:onAppStoreTap()
-    if self.dialog then
-        self.dialog:onEntryActivated(self.entry)
-    end
-    return true
-end
 
-function AppStoreListItem:onAppStoreHold()
-    if self.entry and self.entry.hold_callback then
-        self.entry.hold_callback()
-    end
-    return true
-end
-
--- Visual focus feedback for non-touch / D-pad devices.
--- The item is focusable only when its underlying entry exposes a callback.
-function AppStoreListItem:isFocusable()
-    if not self.entry then
-        return false
-    end
-    if self.entry.select_enabled == false then
-        return false
-    end
-    return self.entry.callback ~= nil or self.entry.hold_callback ~= nil
-end
-
-function AppStoreListItem:onFocus()
-    if not self.frame then
-        return true
-    end
-    self.frame.invert = true
-    UIManager:setDirty(self.show_parent or self, "fast")
-    return true
-end
-
-function AppStoreListItem:onUnfocus()
-    if not self.frame then
-        return true
-    end
-    self.frame.invert = false
-    UIManager:setDirty(self.show_parent or self, "fast")
-    return true
-end
-
--- These two handlers receive synthetic Tap/Hold gestures dispatched by
--- FocusManager:onPress / :onHold on non-touch devices. The framework points
--- the gesture at the focused widget's centre, so the existing AppStoreTap /
--- AppStoreHold GestureRange entries will already match. We add explicit
--- handlers as a safety net so activation works even if the gesture range
--- has not yet been registered (e.g. before the first paint).
-function AppStoreListItem:onTapSelect()
-    if self.dialog then
-        self.dialog:onEntryActivated(self.entry)
-    end
-    return true
-end
-
-function AppStoreListItem:onHoldSelect()
-    if self.entry and self.entry.hold_callback then
-        self.entry.hold_callback()
-    end
-    return true
-end
-
-AppStoreBrowserDialog = FocusManager:extend{
-    AppStore = nil,
-    title = "",
-    items = nil,
-    width = nil,
-    page = 1,
-    total_pages = 1,
-    scroll_offset = nil,
-    on_prev_page = nil,
-    on_next_page = nil,
-    on_dismiss = nil,
-    on_settings_tap = nil,
-}
-
-function AppStoreBrowserDialog:init()
-    self.show_parent = self
-    self.screen_w = Device.screen:getWidth()
-    self.screen_h = Device.screen:getHeight()
-    self.width = self.screen_w
-    self.height = self.screen_h
-    self.dimen = Geom:new{ x = 0, y = 0, w = self.screen_w, h = self.screen_h }
-
-    -- Key bindings for non-touch / D-pad devices.
-    -- FocusManager already wires Up/Down/Left/Right/Press/Hold from KEY_EVENTS;
-    -- here we add page-flip and close shortcuts that are specific to this dialog.
-    if Device:hasKeys() then
-        self.key_events.Close = { { Input.group.Back } }
-        if Device:hasFewKeys() then
-            self.key_events.Close = { { "Left" } }
-        end
-        self.key_events.NextPage = { { Input.group.PgFwd } }
-        self.key_events.PrevPage = { { Input.group.PgBack } }
-        -- Menu key opens the gear menu (all actions) from any scroll position —
-        -- the non-touch equivalent of tapping the gear icon.
-        self.key_events.ShowMenu = { { "Menu" } }
-    end
-    if Device:hasKeyboard() then
-        -- Hardware-keyboard hotkeys for the most frequent actions.
-        self.key_events.HotkeyRefresh = { { "R" } }
-        self.key_events.HotkeyFilter = { { "F" } }
-        self.key_events.HotkeySort = { { "S" } }
-        self.key_events.HotkeySwitchTab = { { "T" } }
-    end
-
-    self.title_bar = TitleBar:new{
-        width = self.width,
-        title = self.title,
-        fullscreen = false,
-        with_bottom_line = true,
-        left_icon = "appbar.settings",
-        left_icon_tap_callback = function()
-            if self.on_settings_tap then
-                self.on_settings_tap()
-            end
-        end,
-        close_callback = function()
-            UIManager:close(self)
-        end,
-        show_parent = self,
-    }
-
-    -- Track focusable rows and their cumulative Y offsets inside list_group so
-    -- that focus moves can scroll the focused row into view on non-touch devices.
-    self._focusable_items = {}
-    self._focusable_row_offsets = {}
-
-    local list_group = VerticalGroup:new{}
-    local entry_width = self:getListEntryWidth()
-    -- Building each row's TextBoxWidget is the dominant cost on a long
-    -- single-list page (hundreds of entries, ~seconds on slow e-ink). When this
-    -- runs inside a Trapper coroutine, show a real "N / total" progress message.
-    local Trapper = require("ui/trapper")
-    local total_items = self.items and #self.items or 0
-    local show_progress = total_items > 30 and Trapper:isWrapped()
-    -- ~10 updates total: each Trapper:info yields so UIManager repaints the
-    -- counter, and on slow e-ink every repaint is costly, so keep them few.
-    local progress_step = math.max(1, math.floor(total_items / 10))
-    if self.items then
-        for idx, entry in ipairs(self.items) do
-            local item_widget = AppStoreListItem:new{
-                entry = entry,
-                width = entry_width,
-                dialog = self,
-                show_parent = self,
-            }
-            list_group[#list_group + 1] = item_widget
-            if item_widget:isFocusable() then
-                self._focusable_items[#self._focusable_items + 1] = item_widget
-                local fidx = #self._focusable_items
-                -- Track the first/last real list entries (books/plugins/patches) so
-                -- a page flip can land the cursor at the top/bottom of the new page.
-                if entry.is_entry then
-                    self._first_entry_index = self._first_entry_index or fidx
-                    self._last_entry_index = fidx
-                end
-                -- Track a control row the caller asked to keep focused across the
-                -- rebuild (e.g. the Sort row while cycling, or an action row that
-                -- was focused when a page flip happened).
-                if self.initial_focus and self.initial_focus.id
-                        and entry.focus_id == self.initial_focus.id then
-                    self._focus_target_index = fidx
-                end
-            end
-            if show_progress and idx % progress_step == 0 then
-                self._used_trapper_progress = true
-                Trapper:info(string.format(_("Building list… %d / %d"), idx, total_items), false, true)
-            end
-            if entry.separator and idx < #self.items then
-                list_group[#list_group + 1] = LineWidget:new{
-                    background = Blitbuffer.COLOR_LIGHT_GRAY,
-                    dimen = Geom:new{ w = entry_width, h = Size.line.thin },
-                }
-            else
-                list_group[#list_group + 1] = VerticalSpan:new{ width = Size.span.vertical_default }
-            end
-        end
-    end
-
-    self.list_container = FrameContainer:new{
-        padding = Size.padding.default,
-        bordersize = 0,
-        list_group,
-    }
-    self._list_group = list_group
-
-    local first_button = Button:new{
-        text = "◀◀",
-        menu_style = true,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        callback = function()
-            if self.on_first_page then
-                self.on_first_page()
-            end
-        end,
-    }
-    first_button:enableDisable(self.page > 1)
-
-    local prev_button = Button:new{
-        text = "◀",
-        menu_style = true,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        callback = function()
-            if self.on_prev_page then
-                self.on_prev_page()
-            end
-        end,
-    }
-    prev_button:enableDisable(self.page > 1)
-
-    local page_button = Button:new{
-        text = string.format(_("Page %d / %d"), self.page, math.max(1, self.total_pages)),
-        menu_style = true,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        callback = function()
-            if self.total_pages <= 1 then return end
-            UIManager:show(SpinWidget:new{
-                title_text = _("Go to page"),
-                value = self.page,
-                value_min = 1,
-                value_max = self.total_pages,
-                ok_text = _("Go"),
-                callback = function(spin)
-                    if self.on_goto_page then
-                        self.on_goto_page(spin.value)
-                    end
-                end,
-            })
-        end,
-    }
-
-    local next_button = Button:new{
-        text = "▶",
-        menu_style = true,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        callback = function()
-            if self.on_next_page then
-                self.on_next_page()
-            end
-        end,
-    }
-    next_button:enableDisable(self.page < self.total_pages)
-
-    local last_button = Button:new{
-        text = "▶▶",
-        menu_style = true,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        callback = function()
-            if self.on_last_page then
-                self.on_last_page()
-            end
-        end,
-    }
-    last_button:enableDisable(self.page < self.total_pages)
-
-    -- Optional compact action toolbar: short fixed-label actions (Switch /
-    -- Refresh / Manage) as a single centered button row, kept OUT of the
-    -- scrollable list so they don't eat ~3 rows of list space. State controls
-    -- (Filter / Sort) stay as full-width list rows since their text is variable.
-    local toolbar_height = 0
-    if self.toolbar_buttons and #self.toolbar_buttons > 0 then
-        local tb = HorizontalGroup:new{}
-        self._toolbar_widgets = {}
-        self._toolbar_ids = {}
-        for i, spec in ipairs(self.toolbar_buttons) do
-            if i > 1 then
-                table.insert(tb, HorizontalSpan:new{ width = Size.span.horizontal_default })
-            end
-            -- Bordered, rounded button look (no background fill, so the border
-            -- stays visible).
-            local btn = Button:new{
-                text = spec.text,
-                radius = Size.radius.button,
-                callback = spec.callback,
-            }
-            table.insert(tb, btn)
-            self._toolbar_widgets[#self._toolbar_widgets + 1] = btn
-            self._toolbar_ids[#self._toolbar_ids + 1] = { id = spec.id }
-        end
-        self.toolbar = tb
-        toolbar_height = tb:getSize().h + Size.span.vertical_default
-    end
-
-    local title_height = self.title_bar:getHeight()
-    local footer_height = math.max(first_button:getSize().h, prev_button:getSize().h, page_button:getSize().h, next_button:getSize().h, last_button:getSize().h)
-    local vertical_padding = 3 * Size.span.vertical_default
-    local body_height = self.screen_h - title_height - footer_height - toolbar_height - vertical_padding
-    if body_height < math.floor(self.screen_h * 0.5) then
-        body_height = math.floor(self.screen_h * 0.5)
-    end
-
-    -- In paginated mode let PgBack/PgFwd reach the dialog's onPrevPage/onNextPage
-    -- so the device's side keys flip logical pages. In single-list mode (one
-    -- page) keep those keys for the scroller so they scroll the long list.
-    local scroller_ignore_events = self.total_pages > 1
-        and { "key_pg_back", "key_pg_fwd" } or nil
-    self.list_scroller = ScrollableContainer:new{
-        dimen = Geom:new{ w = self.width, h = body_height },
-        show_parent = self,
-        ignore_events = scroller_ignore_events,
-        self.list_container,
-    }
-    self.cropping_widget = self.list_scroller
-
-    self.footer = HorizontalGroup:new{
-        first_button,
-        HorizontalSpan:new{ width = Size.span.horizontal_default },
-        prev_button,
-        HorizontalSpan:new{ width = Size.span.horizontal_default },
-        page_button,
-        HorizontalSpan:new{ width = Size.span.horizontal_default },
-        next_button,
-        HorizontalSpan:new{ width = Size.span.horizontal_default },
-        last_button,
-    }
-
-    self.content = VerticalGroup:new{
-        self.title_bar,
-        VerticalSpan:new{ width = Size.span.vertical_default },
-    }
-    if self.toolbar then
-        table.insert(self.content, self.toolbar)
-        table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
-    end
-    table.insert(self.content, self.list_scroller)
-    table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
-    table.insert(self.content, self.footer)
-
-    self[1] = FrameContainer:new{
-        background = Blitbuffer.COLOR_WHITE,
-        bordersize = 0,
-        padding = 0,
-        dimen = self.dimen:copy(),
-        self.content,
-    }
-
-    -- Cache pagination buttons for layout / page change reflection.
-    self._first_button = first_button
-    self._prev_button = prev_button
-    self._page_button = page_button
-    self._next_button = next_button
-    self._last_button = last_button
-
-    -- Compute cumulative Y offsets of every list_group child relative to the
-    -- inner top of list_container. We rely on widgets reporting a stable size
-    -- via :getSize() at this point (TextBoxWidget has computed its lines).
-    -- Padding from FrameContainer is added so coordinates align with what the
-    -- ScrollableContainer paints.
-    do
-        local cursor_y = Size.padding.default
-        for _, child in ipairs(list_group) do
-            local size = child.getSize and child:getSize() or { h = 0 }
-            local h = size.h or 0
-            if child.isFocusable and child:isFocusable() then
-                self._focusable_row_offsets[child] = { y = cursor_y, h = h }
-            end
-            cursor_y = cursor_y + h
-        end
-    end
-
-    -- Build the FocusManager 2-D layout. Rows:
-    --   1) optional title bar buttons (settings gear, close X)
-    --   2) one row per focusable list item
-    --   3) footer { Previous, Next } pagination buttons
-    self.layout = {}
-    if self.title_bar.generateHorizontalLayout then
-        local title_rows = self.title_bar:generateHorizontalLayout()
-        for _, row in ipairs(title_rows) do
-            table.insert(self.layout, row)
-        end
-    end
-    -- Toolbar action buttons form one multi-column focus row, above the list.
-    if self._toolbar_widgets and #self._toolbar_widgets > 0 then
-        table.insert(self.layout, self._toolbar_widgets)
-        self._toolbar_row_index = #self.layout
-    end
-    local first_list_row_index = #self.layout + 1
-    self._first_list_row_index = first_list_row_index
-    for _, item_widget in ipairs(self._focusable_items) do
-        table.insert(self.layout, { item_widget })
-    end
-    local footer_row = {}
-    local footer_ids = {}
-    if self.page > 1 then
-        table.insert(footer_row, first_button); table.insert(footer_ids, { id = "first" })
-        table.insert(footer_row, prev_button); table.insert(footer_ids, { id = "prev" })
-    end
-    if self.total_pages > 1 then
-        table.insert(footer_row, page_button); table.insert(footer_ids, { id = "page" })
-    end
-    if self.page < self.total_pages then
-        table.insert(footer_row, next_button); table.insert(footer_ids, { id = "next" })
-        table.insert(footer_row, last_button); table.insert(footer_ids, { id = "last" })
-    end
-    if #footer_row > 0 then
-        table.insert(self.layout, footer_row)
-        self._footer_row_index = #self.layout
-        self._footer_buttons = footer_ids
-    end
-
-    -- Initial focus. A caller may pass self.initial_focus to keep the cursor in a
-    -- sensible place across a rebuild (page flip / sort cycle); otherwise default
-    -- to the first focusable list item. FOCUS_ONLY_ON_NT keeps touch UIs free of
-    -- an unsolicited highlight while giving D-pad users visible focus.
-    self.selected = self:_resolveInitialFocus(first_list_row_index)
-
-    if self.scroll_offset then
-        self:setScrollOffset(self.scroll_offset)
-    end
-
-    if Device:hasDPad() and #self.layout > 0 then
-        UIManager:nextTick(function()
-            -- moveFocusTo only emits a Focus event on non-touch devices, which
-            -- avoids leaking the highlight onto touch UIs.
-            self:moveFocusTo(self.selected.x, self.selected.y, FocusManager.FOCUS_ONLY_ON_NT)
-            self:_ensureFocusedVisible()
-        end)
-    end
-end
-
-function AppStoreBrowserDialog:getListEntryWidth()
-    local horizontal_reserve = 3 * ScrollableContainer.scroll_bar_width
-    local width = self.width - 2 * Size.padding.default - horizontal_reserve
-    if width < 0 then
-        width = self.width - 2 * Size.padding.default
-    end
-    return math.max(width, 0)
-end
-
-function AppStoreBrowserDialog:onEntryActivated(entry)
-    if not entry or entry.select_enabled == false then
-        return true
-    end
-    if entry.callback then
-        entry.callback()
-    end
-    if not entry.keep_menu_open then
-        UIManager:close(self)
-    end
-    return true
-end
-
-function AppStoreBrowserDialog:onCloseWidget()
-    if self.on_dismiss then
-        self.on_dismiss(self:getScrollOffset())
-    end
-end
-
-function AppStoreBrowserDialog:onClose()
-    UIManager:close(self)
-    return true
-end
-
--- Resolve where focus should land on (re)build. Honors self.initial_focus:
---   { entry = "first"|"last" }    -> top/bottom real list entry
---   { id = "<focus_id>" }         -> a specific control row (e.g. "sort")
---   { footer = "<id>", direction} -> a footer page-control, with fallback
--- Falls back to the first focusable list item.
-function AppStoreBrowserDialog:_resolveInitialFocus(first_list_row_index)
-    local f = self.initial_focus
-    if f then
-        if f.entry == "first" and self._first_entry_index then
-            return { x = 1, y = first_list_row_index + self._first_entry_index - 1 }
-        elseif f.entry == "last" and self._last_entry_index then
-            return { x = 1, y = first_list_row_index + self._last_entry_index - 1 }
-        elseif f.id and self._focus_target_index then
-            return { x = 1, y = first_list_row_index + self._focus_target_index - 1 }
-        elseif f.toolbar and self._toolbar_row_index and self._toolbar_ids then
-            for col, b in ipairs(self._toolbar_ids) do
-                if b.id == f.toolbar then
-                    return { x = col, y = self._toolbar_row_index }
-                end
-            end
-        elseif f.footer then
-            local sel = self:_resolveFooterFocus(f.footer, f.direction, first_list_row_index)
-            if sel then return sel end
-        end
-    end
-    if #self._focusable_items > 0 then
-        return { x = 1, y = first_list_row_index }
-    elseif #self.layout > 0 then
-        return { x = 1, y = 1 }
-    end
-    return nil
-end
-
-function AppStoreBrowserDialog:_footerColumnOf(id)
-    if not self._footer_buttons then return nil end
-    for col, b in ipairs(self._footer_buttons) do
-        if b.id == id then return col end
-    end
-    return nil
-end
-
--- Keep focus on the footer page-control across a flip. If the same button is
--- gone (reached the first/last page), fall back to the remaining page-controls,
--- then to the edge list entry in the flip direction.
-function AppStoreBrowserDialog:_resolveFooterFocus(which, direction, first_list_row_index)
-    local order = direction == "backward"
-        and { which, "prev", "first", "page" }
-        or { which, "next", "last", "page" }
-    for _, id in ipairs(order) do
-        local col = self:_footerColumnOf(id)
-        if col then return { x = col, y = self._footer_row_index } end
-    end
-    if direction == "backward" and self._first_entry_index then
-        return { x = 1, y = first_list_row_index + self._first_entry_index - 1 }
-    elseif self._last_entry_index then
-        return { x = 1, y = first_list_row_index + self._last_entry_index - 1 }
-    end
-    return nil
-end
-
--- Describe what is currently focused, so a page flip can preserve it.
-function AppStoreBrowserDialog:getFocusContext()
-    local sel = self.selected
-    if not sel then return { kind = "other" } end
-    if self._toolbar_row_index and sel.y == self._toolbar_row_index then
-        local b = self._toolbar_ids and self._toolbar_ids[sel.x]
-        return { kind = "toolbar", which = b and b.id or nil }
-    end
-    if self._footer_row_index and sel.y == self._footer_row_index then
-        local b = self._footer_buttons and self._footer_buttons[sel.x]
-        return { kind = "footer", which = b and b.id or nil }
-    end
-    if self._first_list_row_index and sel.y >= self._first_list_row_index then
-        local item = self._focusable_items[sel.y - self._first_list_row_index + 1]
-        local entry = item and item.entry
-        if entry then
-            if entry.is_entry then return { kind = "entry" } end
-            if entry.focus_id then return { kind = "control", focus_id = entry.focus_id } end
-        end
-    end
-    return { kind = "other" }
-end
-
--- Page-flip key handlers for non-touch / D-pad devices.
-function AppStoreBrowserDialog:onNextPage()
-    if self.page < self.total_pages and self.on_next_page then
-        self.on_next_page()
-    end
-    return true
-end
-
-function AppStoreBrowserDialog:onPrevPage()
-    if self.page > 1 and self.on_prev_page then
-        self.on_prev_page()
-    end
-    return true
-end
-
--- Gear menu and hotkeys: reach the actions from any scroll position / page.
-function AppStoreBrowserDialog:onShowMenu()
-    if self.on_settings_tap then self.on_settings_tap() end
-    return true
-end
-
-function AppStoreBrowserDialog:onHotkeyRefresh()
-    if self.on_refresh then self.on_refresh() end
-    return true
-end
-
-function AppStoreBrowserDialog:onHotkeyFilter()
-    if self.on_filter then self.on_filter() end
-    return true
-end
-
-function AppStoreBrowserDialog:onHotkeySort()
-    if self.on_sort then self.on_sort() end
-    return true
-end
-
-function AppStoreBrowserDialog:onHotkeySwitchTab()
-    if self.on_switch_tab then self.on_switch_tab() end
-    return true
-end
-
--- After the FocusManager moves focus, scroll the inner ScrollableContainer so
--- that the newly focused list row is visible. Title-bar / footer rows live
--- outside the scrollable area and are skipped.
-function AppStoreBrowserDialog:_ensureFocusedVisible()
-    local focused = self:getFocusItem()
-    if not focused or not self.list_scroller then
-        return
-    end
-    local offset = self._focusable_row_offsets and self._focusable_row_offsets[focused]
-    if not offset then
-        return
-    end
-    local scroller = self.list_scroller
-    if not scroller._is_scrollable then
-        return
-    end
-    local scroll_y = scroller._scroll_offset_y or 0
-    local crop_h = scroller._crop_h or (scroller.dimen and scroller.dimen.h) or 0
-    if crop_h <= 0 then
-        return
-    end
-    local target_top = offset.y
-    local target_bottom = offset.y + offset.h
-    if target_top < scroll_y then
-        scroller:_scrollBy(0, target_top - scroll_y)
-    elseif target_bottom > scroll_y + crop_h then
-        scroller:_scrollBy(0, target_bottom - (scroll_y + crop_h))
-    end
-end
-
-function AppStoreBrowserDialog:onFocusMove(args)
-    local handled = FocusManager.onFocusMove(self, args)
-    self:_ensureFocusedVisible()
-    return handled
-end
-
-function AppStoreBrowserDialog:getScrollOffset()
-    if self.list_scroller then
-        return self.list_scroller:getScrolledOffset()
-    end
-end
-
-function AppStoreBrowserDialog:setScrollOffset(offset)
-    if offset and self.list_scroller then
-        self.list_scroller:setScrolledOffset(offset)
-    end
-end
-
-function AppStoreBrowserDialog:resetScroll()
+function StorefrontBrowserDialog:resetScroll()
     if self.list_scroller then
         self.list_scroller:setScrolledOffset({ x = 0, y = 0 })
     end
@@ -5130,7 +4384,7 @@ end
 
 ensureCacheDir = function()
     local lfs = require("libs/libkoreader-lfs")
-    local cache_dir = DataStorage:getDataDir() .. "/cache/appstore"
+    local cache_dir = DataStorage:getDataDir() .. "/cache/Storefront"
     if lfs.attributes(cache_dir, "mode") ~= "directory" then
         lfs.mkdir(cache_dir)
     end
@@ -5170,7 +4424,7 @@ end
 
 -- Fetch commits between two tags via the GitHub compare API and show them
 -- in a scrollable dialog.  Called from inside the Full changelog dialog.
-function AppStore:showCommitCompare(owner, repo_desc, base_tag, head_tag)
+function Storefront:showCommitCompare(owner, repo_desc, base_tag, head_tag)
     NetworkMgr:runWhenOnline(function()
         local progress = InfoMessage:new{ text = _("Fetching commits…"), timeout = 0 }
         UIManager:show(progress)
@@ -5232,7 +4486,7 @@ end
 -- `installed_tag` is the exact GitHub release tag of the installed version;
 -- when present it is used as the range boundary directly (no version parsing).
 -- Only shown when the target release is strictly newer than what is installed.
-function AppStore:showFullChangelog(owner, repo_desc, installed_version, target_release, installed_tag)
+function Storefront:showFullChangelog(owner, repo_desc, installed_version, target_release, installed_tag)
     NetworkMgr:runWhenOnline(function()
         local progress = InfoMessage:new{ text = _("Fetching changelog…"), timeout = 0 }
         UIManager:show(progress)
@@ -5417,7 +4671,7 @@ end
 
 -- Display a paginated list of release assets. `on_select` is called with the
 -- chosen asset table when the user taps an entry.
-function AppStore:renderAssetListPage(repo, release, assets, page, on_select)
+function Storefront:renderAssetListPage(repo, release, assets, page, on_select)
     page = page or 1
     local total = #assets
     local total_pages = math.max(1, math.ceil(total / ASSETS_PAGE_SIZE))
@@ -5492,7 +4746,7 @@ function AppStore:renderAssetListPage(repo, release, assets, page, on_select)
     UIManager:show(dialog)
 end
 
-function AppStore:promptPluginInstallOptions(repo, release_override)
+function Storefront:promptPluginInstallOptions(repo, release_override)
     if not repo then
         return
     end
@@ -5707,7 +4961,7 @@ local RELEASES_PAGE_SIZE = 10
 -- Display a paginated list of every release published by `repo`. Selecting a
 -- release closes this dialog and reopens the Download options popup for that
 -- release; this avoids stacking popups on top of each other.
-function AppStore:showReleaseListDialog(repo, current_release)
+function Storefront:showReleaseListDialog(repo, current_release)
     if not repo then
         return
     end
@@ -5757,7 +5011,7 @@ local function isPreRelease(release)
     return false
 end
 
-function AppStore:renderReleaseListPage(repo, releases, page, current_release, filter_pre_releases)
+function Storefront:renderReleaseListPage(repo, releases, page, current_release, filter_pre_releases)
     if filter_pre_releases == nil then filter_pre_releases = true end
     page = page or 1
 
@@ -5911,7 +5165,7 @@ function AppStore:renderReleaseListPage(repo, releases, page, current_release, f
     UIManager:show(dialog)
 end
 
-function AppStore:installPluginFromReleaseAsset(repo, release, asset)
+function Storefront:installPluginFromReleaseAsset(repo, release, asset)
     if not repo or not asset then
         return
     end
@@ -6115,7 +5369,7 @@ ensurePatchesDir = function()
     local dir = DataStorage:getDataDir() .. "/patches"
     local ok, err = util.makePath(dir)
     if not ok then
-        logger.warn("AppStore patches dir create failed", err)
+        logger.warn("Storefront patches dir create failed", err)
         return nil, err or "mkdir"
     end
     return dir
@@ -6165,7 +5419,7 @@ local function extractSearchTerms(search)
     return terms
 end
 
-function AppStore:repoMatchesSearch(repo, search)
+function Storefront:repoMatchesSearch(repo, search)
     local terms = extractSearchTerms(search)
     if not terms then
         return true
@@ -6204,7 +5458,7 @@ function AppStore:repoMatchesSearch(repo, search)
     return true
 end
 
-function AppStore:patchMatchesSearch(patch, search)
+function Storefront:patchMatchesSearch(patch, search)
     local terms = extractSearchTerms(search)
     if not terms then
         return true
@@ -6237,7 +5491,7 @@ function AppStore:patchMatchesSearch(patch, search)
     return true
 end
 
-function AppStore:repoHasMatchingPatch(repo, search)
+function Storefront:repoHasMatchingPatch(repo, search)
     if not search or search == "" then
         return true
     end
@@ -6428,16 +5682,16 @@ for _, option in ipairs(SORT_OPTIONS) do
     SORT_OPTION_LOOKUP[option.id] = option
 end
 
-function AppStore:getSortOption(mode)
+function Storefront:getSortOption(mode)
     return SORT_OPTION_LOOKUP[mode] or SORT_OPTION_LOOKUP[DEFAULT_SORT_MODE]
 end
 
-function AppStore:getSortSummary()
+function Storefront:getSortSummary()
     local option = self:getSortOption(self.browser_state.sort_mode)
     return option and option.summary or ""
 end
 
-function AppStore:advanceSortMode()
+function Storefront:advanceSortMode()
     local current = self.browser_state.sort_mode or DEFAULT_SORT_MODE
     local next_index = 1
     for idx, option in ipairs(SORT_OPTIONS) do
@@ -6456,7 +5710,7 @@ function AppStore:advanceSortMode()
     self:reopenBrowser()
 end
 
-function AppStore:sortRepoList(list)
+function Storefront:sortRepoList(list)
     if not list or #list <= 1 then
         return
     end
@@ -6465,7 +5719,7 @@ function AppStore:sortRepoList(list)
     table.sort(list, comparator)
 end
 
-function AppStore:sortPatchEntries(entries)
+function Storefront:sortPatchEntries(entries)
     if not entries or #entries <= 1 then
         return entries
     end
@@ -6487,12 +5741,12 @@ local function normalizeScrollOffset(offset)
     return { x = x, y = y }
 end
 
-function AppStore:loadBrowserStateFromSettings()
+function Storefront:loadBrowserStateFromSettings()
     if self._browser_state_loaded then
         return
     end
     self._browser_state_loaded = true
-    local encoded = AppStoreSettings:readSetting(BROWSER_STATE_KEY)
+    local encoded = StorefrontSettings:readSetting(BROWSER_STATE_KEY)
     if type(encoded) ~= "string" or encoded == "" then
         return
     end
@@ -6502,6 +5756,7 @@ function AppStore:loadBrowserStateFromSettings()
     end
     self.browser_state = {
         kind = decoded.kind == "patch" and "patch" or "plugin",
+        tab = decoded.tab or (decoded.kind == "patch" and "Patches" or "Plugins"),
         search_text = decoded.search_text or "",
         owner = decoded.owner or "",
         min_stars = tonumber(decoded.min_stars) or 0,
@@ -6512,12 +5767,13 @@ function AppStore:loadBrowserStateFromSettings()
     }
 end
 
-function AppStore:saveBrowserState()
+function Storefront:saveBrowserState()
     if not self.browser_state then
         return
     end
     local state = {
         kind = self.browser_state.kind == "patch" and "patch" or "plugin",
+        tab = self.browser_state.tab or "Plugins",
         search_text = self.browser_state.search_text or "",
         owner = self.browser_state.owner or "",
         min_stars = tonumber(self.browser_state.min_stars) or 0,
@@ -6529,18 +5785,19 @@ function AppStore:saveBrowserState()
     self.browser_state.scroll_offset = state.scroll_offset
     local ok, encoded = pcall(json.encode, state)
     if ok then
-        AppStoreSettings:saveSetting(BROWSER_STATE_KEY, encoded)
-        AppStoreSettings:flush()
+        StorefrontSettings:saveSetting(BROWSER_STATE_KEY, encoded)
+        StorefrontSettings:flush()
     end
 end
 
-function AppStore:ensureBrowserState()
+function Storefront:ensureBrowserState()
     if not self.browser_state then
         self:loadBrowserStateFromSettings()
     end
     if not self.browser_state then
         self.browser_state = {
             kind = "plugin",
+            tab = "Plugins",
             search_text = "",
             owner = "",
             min_stars = 0,
@@ -6553,6 +5810,7 @@ function AppStore:ensureBrowserState()
         return
     end
     self.browser_state.kind = self.browser_state.kind == "patch" and "patch" or "plugin"
+    self.browser_state.tab = self.browser_state.tab or (self.browser_state.kind == "patch" and "Patches" or "Plugins")
     if type(self.browser_state.search_text) ~= "string" then
         self.browser_state.search_text = ""
     end
@@ -6570,7 +5828,7 @@ function AppStore:ensureBrowserState()
     end
 end
 
-function AppStore:updateReadmeFilter()
+function Storefront:updateReadmeFilter()
     self.readme_filter = nil
     self:ensureBrowserState()
     local kind = self.browser_state.kind or "plugin"
@@ -6600,7 +5858,7 @@ function AppStore:updateReadmeFilter()
             local response, err = GitHub.searchRepositories(request_opts)
             if not response then
                 local body = err and err.body or err
-                logger.warn("AppStore README search error", query, body)
+                logger.warn("Storefront README search error", query, body)
                 return false
             end
             local items = response.items or {}
@@ -6661,7 +5919,7 @@ function AppStore:updateReadmeFilter()
     }
 end
 
-function AppStore:getOwners(kind)
+function Storefront:getOwners(kind)
     local descriptors = self:getRepoDescriptors(kind)
     local seen = {}
     local owners = {}
@@ -6680,7 +5938,7 @@ function AppStore:getOwners(kind)
     return owners
 end
 
-function AppStore:matchesGeneralFilters(repo, filters)
+function Storefront:matchesGeneralFilters(repo, filters)
     filters = filters or self.browser_state or {}
     local owner_filter = normalizedLower(filters.owner)
     if owner_filter ~= "" then
@@ -6702,7 +5960,7 @@ function AppStore:matchesGeneralFilters(repo, filters)
     return true
 end
 
-function AppStore:descriptorMatches(repo, filters)
+function Storefront:descriptorMatches(repo, filters)
     if not self:matchesGeneralFilters(repo, filters) then
         return false
     end
@@ -6713,7 +5971,7 @@ function AppStore:descriptorMatches(repo, filters)
     return true
 end
 
-function AppStore:getFilteredDescriptors(kind)
+function Storefront:getFilteredDescriptors(kind)
     self:ensureBrowserState()
     local descriptors = self:getRepoDescriptors(kind)
     local filtered = {}
@@ -6783,7 +6041,7 @@ function AppStore:getFilteredDescriptors(kind)
     return filtered, #descriptors
 end
 
-function AppStore:getFilterSummary()
+function Storefront:getFilterSummary()
     self:ensureBrowserState()
     local filters = self.browser_state
     local parts = {}
@@ -6803,14 +6061,14 @@ function AppStore:getFilterSummary()
     return _([[Filters: ]]) .. table.concat(parts, ", ")
 end
 
-function AppStore:getCacheStatusLine(kind, total_count)
+function Storefront:getCacheStatusLine(kind, total_count)
     local ts = Cache.getLastFetched(kind)
     local ts_text = ts and ts > 0 and formatTimestamp(ts) or _("Never")
     local label = kind == "plugin" and _("Plugins cached: %s (last update: %s)") or _("Patches cached: %s (last update: %s)")
     return string.format(label, tostring(total_count or 0), ts_text)
 end
 
-function AppStore:getCacheWarning(kind)
+function Storefront:getCacheWarning(kind)
     local ts = Cache.getLastFetched(kind)
     if not ts or ts <= 0 then
         return _("Cache empty. Refresh to retrieve repositories."), true
@@ -6854,7 +6112,7 @@ local function formatRepoEntry(repo, opts)
     return table.concat(lines, "\n")
 end
 
-function AppStore:fetchPatchEntriesFromGitHub(repo)
+function Storefront:fetchPatchEntriesFromGitHub(repo)
     local owner = extractRepoOwner(repo)
     if not owner or not repo.name then
         return {}
@@ -6864,7 +6122,7 @@ function AppStore:fetchPatchEntriesFromGitHub(repo)
         or "HEAD"
     local tree, err = GitHub.fetchRepoTree(owner, repo.name, branch)
     if not tree or type(tree.tree) ~= "table" then
-        logger.warn("AppStore patch tree fetch failed", repo.full_name or repo.name, err)
+        logger.warn("Storefront patch tree fetch failed", repo.full_name or repo.name, err)
         return {}
     end
     local entries = {}
@@ -6890,7 +6148,7 @@ function AppStore:fetchPatchEntriesFromGitHub(repo)
     return entries
 end
 
-function AppStore:storePatchEntriesForRepo(repo, source_pushed_at)
+function Storefront:storePatchEntriesForRepo(repo, source_pushed_at)
     local repo_id = repo.repo_id or repo.id
     if not repo_id then
         return
@@ -6905,7 +6163,7 @@ end
 -- we successfully downloaded the tree. Unchanged repos skip the git/trees
 -- API call entirely. Repos that dropped out of the search results are pruned
 -- so that stale rows never survive across refreshes.
-function AppStore:refreshPatchFileListings()
+function Storefront:refreshPatchFileListings()
     local patch_repos = self:getRepoDescriptors("patch")
 
     local valid_repo_ids = {}
@@ -6949,10 +6207,10 @@ function AppStore:refreshPatchFileListings()
             skipped = skipped + 1
         end
     end
-    logger.dbg("AppStore patch tree refresh: refreshed=", refreshed, "skipped=", skipped)
+    logger.dbg("Storefront patch tree refresh: refreshed=", refreshed, "skipped=", skipped)
 end
 
-function AppStore:getPatchEntriesForRepo(repo)
+function Storefront:getPatchEntriesForRepo(repo)
     self.patch_cache = self.patch_cache or {}
     local repo_id = repo.repo_id or repo.id
     local key = repo_id or repo.full_name or repo.name or "repo"
@@ -6991,7 +6249,7 @@ function AppStore:getPatchEntriesForRepo(repo)
     return entries
 end
 
-function AppStore:collectPatchEntries(repos)
+function Storefront:collectPatchEntries(repos)
     local aggregated = {}
     local search = normalizedLower(self.browser_state.search_text)
     local search_active = search ~= ""
@@ -7034,7 +6292,7 @@ function AppStore:collectPatchEntries(repos)
     return self:sortPatchEntries(aggregated)
 end
 
-function AppStore:makeRepoMenuItem(repo, installed_lookup)
+function Storefront:makeRepoMenuItem(repo, installed_lookup)
     local is_installed = false
     if installed_lookup then
         if repo.full_name and installed_lookup[repo.full_name] then
@@ -7043,7 +6301,21 @@ function AppStore:makeRepoMenuItem(repo, installed_lookup)
             is_installed = true
         end
     end
+    local stars = tonumber(repo.stars) or 0
+    local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
+    local badge = is_installed and _("Installed") or nil
+    local description = normalizeDescription(repo.description)
+    local owner = getRepoOwner(repo) or ""
+    local ts = repo.data and (repo.data.pushed_at or repo.data.created_at)
+    local updated = (ts and type(ts) == "string") and ts:sub(1, 10) or ""
+
     return {
+        name = repo.name or repo.full_name or _("Repository"),
+        owner = owner,
+        stars_fmt = stars_fmt,
+        updated = updated,
+        description = description,
+        badge = badge,
         text = formatRepoEntry(repo),
         installed = is_installed,
         is_entry = true,
@@ -7057,8 +6329,9 @@ function AppStore:makeRepoMenuItem(repo, installed_lookup)
     }
 end
 
-function AppStore:makePatchMenuItem(repo, patch)
+function Storefront:makePatchMenuItem(repo, patch)
     local stars = tonumber(repo.stars) or (repo.data and tonumber(repo.data.stargazers_count)) or 0
+    local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
     local lines = { string.format("• %s — ⭐ %d", patch.filename, stars) }
     if patch.display_path and patch.display_path ~= patch.filename then
         table.insert(lines, "  " .. patch.display_path)
@@ -7071,6 +6344,12 @@ function AppStore:makePatchMenuItem(repo, patch)
         table.insert(lines, "  " .. repo_title)
     end
     return {
+        name = patch.filename,
+        owner = getRepoOwner(repo) or "",
+        stars_fmt = stars_fmt,
+        updated = "",
+        description = patch.display_path or "",
+        badge = nil,
         text = table.concat(lines, "\n"),
         is_entry = true,
         keep_menu_open = true,
@@ -7083,9 +6362,14 @@ function AppStore:makePatchMenuItem(repo, patch)
     }
 end
 
-function AppStore:buildBrowserEntries()
+function Storefront:buildBrowserEntries()
     self:ensureBrowserState()
-    local kind = self.browser_state.kind or "plugin"
+    local tab = self.browser_state.tab or "Plugins"
+    if tab == "Updates" then
+        return self:buildUpdatesEntries(), 1
+    end
+    local kind = tab == "Plugins" and "plugin" or "patch"
+    self.browser_state.kind = kind
     local items = {}
 
     if self.match_context then
@@ -7116,37 +6400,11 @@ function AppStore:buildBrowserEntries()
         end
     end
 
-    -- The short fixed-label actions (switch tab / refresh / manage installed)
-    -- live in the dialog's compact toolbar (built from toolbar_buttons), not in
-    -- the list body, to save vertical space. The variable-width state controls
-    -- (Filter / Sort) stay as full-width list rows: their text can be long and
-    -- doubles as a visible indicator of the current filter/sort. All of these are
-    -- also in the gear menu (Menu key) and the r/f/s/t hotkeys.
-    table.insert(items, {
-        text = self:getFilterSummary(),
-        keep_menu_open = true,
-        focus_id = "filter",
-        callback = function()
-            self:browserOpenFilter()
-        end,
-    })
-    table.insert(items, {
-        text = self:getSortSummary(),
-        keep_menu_open = true,
-        -- Keep focus on this row across the rebuild so the sort mode can be
-        -- cycled by pressing repeatedly without the cursor jumping to the top.
-        focus_id = "sort",
-        callback = function()
-            self:browserAdvanceSort()
-        end,
-    })
-    items[#items].separator = true
-
     local filtered, total = self:getFilteredDescriptors(kind)
-    table.insert(items, {
-        text = self:getCacheStatusLine(kind, total),
-        select_enabled = false,
-    })
+    -- table.insert(items, {
+    --     text = self:getCacheStatusLine(kind, total),
+    --     select_enabled = false,
+    -- })
     local warning = self:getCacheWarning(kind)
     if warning then
         table.insert(items, {
@@ -7165,11 +6423,11 @@ function AppStore:buildBrowserEntries()
     else
         match_line = string.format(_("Matching entries: %s / %s"), tostring(#filtered), tostring(total))
     end
-    table.insert(items, {
-        text = match_line,
-        select_enabled = false,
-    })
-    items[#items].separator = true
+    -- table.insert(items, {
+    --     text = match_line,
+    --     select_enabled = false,
+    -- })
+    -- items[#items].separator = true
 
     local page_size = getBrowserPageSize()
     local total_pages = math.max(1, math.ceil(display_total / page_size))
@@ -7214,14 +6472,14 @@ function AppStore:buildBrowserEntries()
     return items, total_pages
 end
 
-function AppStore:closeBrowserMenu()
+function Storefront:closeBrowserMenu()
     if self.browser_menu then
         UIManager:close(self.browser_menu)
         self.browser_menu = nil
     end
 end
 
-function AppStore:resetBrowserScrollState()
+function Storefront:resetBrowserScrollState()
     if self.browser_menu and self.browser_menu.resetScroll then
         self.browser_menu:resetScroll()
     end
@@ -7233,7 +6491,7 @@ end
 --   on a list entry  -> top entry when flipping forward, bottom when backward
 --   on a control row -> the same control row
 --   on a footer page-control -> the same footer control (with fallback)
-function AppStore:computePageFlipFocus(dialog, forward)
+function Storefront:computePageFlipFocus(dialog, forward)
     if not dialog or not dialog.getFocusContext then return nil end
     local ctx = dialog:getFocusContext()
     if ctx.kind == "entry" then
@@ -7248,7 +6506,7 @@ function AppStore:computePageFlipFocus(dialog, forward)
     return nil
 end
 
-function AppStore:reopenBrowser(kind)
+function Storefront:reopenBrowser(kind)
     -- Callers that change what the list shows (sort, filter, clear filters, page
     -- size, page flips) set browser_state.scroll_offset = nil to request a fresh
     -- top-of-page view. Honour it: reset the live scroller and suppress the
@@ -7266,23 +6524,30 @@ end
 -- Browser actions, shared by the gear menu, the Menu hardware key and the
 -- r/f/s/t hotkeys. Kept out of the list body so they are reachable from any
 -- scroll position / page without scrolling back to the top.
-function AppStore:browserSwitchTab()
+function Storefront:browserSwitchTab(tab_name)
     self:ensureBrowserState()
-    local kind = self.browser_state.kind or "plugin"
-    local other_kind = kind == "plugin" and "patch" or "plugin"
-    self.browser_state.kind = other_kind
+    if not tab_name then
+        local current = self.browser_state.tab or "Plugins"
+        if current == "Plugins" then
+            tab_name = "Patches"
+        elseif current == "Patches" then
+            tab_name = "Updates"
+        else
+            tab_name = "Plugins"
+        end
+    end
+    self.browser_state.tab = tab_name
+    self.browser_state.kind = (tab_name == "Patches" and "patch" or "plugin")
     self.browser_state.page = 1
     self.browser_state.scroll_offset = nil
     self:resetFiltersForRefresh()
     self:saveBrowserState()
-    -- Reset the live scroller (and suppress the dismiss-time save) before closing,
-    -- so the other tab opens at the top instead of the previous tab's offset.
     self:resetBrowserScrollState()
     self:closeBrowserMenu()
     self:showBrowser()
 end
 
-function AppStore:browserRefresh()
+function Storefront:browserRefresh()
     self:ensureBrowserState()
     local kind = self.browser_state.kind or "plugin"
     self:resetBrowserScrollState()
@@ -7310,7 +6575,7 @@ function AppStore:browserRefresh()
     end)
 end
 
-function AppStore:browserManageInstalled()
+function Storefront:browserManageInstalled()
     self:ensureBrowserState()
     local kind = self.browser_state.kind or "plugin"
     self:closeBrowserMenu()
@@ -7321,69 +6586,60 @@ function AppStore:browserManageInstalled()
     end
 end
 
-function AppStore:browserOpenFilter()
+function Storefront:browserOpenFilter()
     self:showFilterDialog()
 end
 
-function AppStore:browserAdvanceSort()
+function Storefront:browserAdvanceSort()
     self:advanceSortMode()
 end
 
-function AppStore:showBrowser(kind)
+function Storefront:showBrowser(kind)
+    logger.info("Storefront: showBrowser called")
     self:ensureBrowserState()
-    -- Always ensure only a single AppStore browser dialog is active.
-    -- If one is already open (possibly underneath other dialogs), close it
-    -- before creating a new one so that applying filters or reopening the
-    -- browser does not leave stale AppStore screens in the UI stack.
     if self.browser_menu then
         self:closeBrowserMenu()
     end
-    local previous_kind = self.browser_state.kind or "plugin"
-    if kind and kind ~= self.browser_state.kind then
-        self.browser_state.kind = kind
-        self.browser_state.page = 1
-        self.browser_state.scroll_offset = nil
-        self:saveBrowserState()
+    local current_tab = self.browser_state.tab or "Plugins"
+    if current_tab == "Updates" then
+        self:maybeAutoCheckUpdates()
+    end
 
-        local search_text = self.browser_state.search_text or ""
-        if self.browser_state.search_in_readme and search_text ~= "" then
-            self.readme_filter = nil
-            NetworkMgr:runWhenOnline(function()
-                if not self.browser_state or not self.browser_state.search_in_readme then
-                    return
-                end
-                if (self.browser_state.kind or "plugin") ~= kind then
-                    return
-                end
-                if (self.browser_state.search_text or "") == "" then
-                    return
-                end
-                self:updateReadmeFilter()
-                UIManager:nextTick(function()
-                    self:reopenBrowser(kind)
-                end)
-            end)
+    local Cache = require("storefront_cache")
+    local check_kind = (current_tab == "Patches") and "patch" or "plugin"
+    local last_fetched = Cache.getLastFetched(check_kind)
+    if not last_fetched or last_fetched == 0 then
+        self.auto_refreshed = self.auto_refreshed or {}
+        if not self.auto_refreshed[check_kind] then
+            self.auto_refreshed[check_kind] = true
+            logger.info("Storefront: Cache is empty, auto-refreshing")
+            self:browserRefresh()
+            return
         end
     end
-    local title = self.browser_state.kind == "plugin" and _("App Store · Plugins") or _("App Store · Patches")
-    -- Wrap in Trapper so buildBrowserEntries can show a dismissable progress
-    -- message while building a long single-list page. For short paginated pages
-    -- no Trapper:info is emitted and the coroutine runs straight through.
+
+    local title = _("Storefront")
     local Trapper = require("ui/trapper")
     Trapper:wrap(function()
     local items, total_pages = self:buildBrowserEntries()
-    -- One-shot: a caller (sort cycle / page flip) may ask where focus should land
-    -- across this rebuild. Consume it so later rebuilds focus normally.
     local initial_focus = self.browser_focus_hint
     self.browser_focus_hint = nil
-    -- Compact toolbar: short fixed-label actions, kept out of the list body.
-    local other_tab = self.browser_state.kind == "plugin" and _("Patches") or _("Plugins")
-    local toolbar_buttons = {
-        { id = "switch", text = "↔ " .. other_tab, callback = function() self:browserSwitchTab() end },
-        { id = "refresh", text = _("Refresh"), callback = function() self:browserRefresh() end },
-        { id = "manage", text = _("Installed"), callback = function() self:browserManageInstalled() end },
-    }
-    local dialog = AppStoreBrowserDialog:new{
+
+    local toolbar_buttons
+    if current_tab == "Updates" then
+        toolbar_buttons = {
+            { id = "check_all", text = _("↻ Check all"), callback = function() self:browserRefresh() end },
+        }
+    end
+
+    local updates_count = 0
+    pcall(function()
+        local p_sum = self:collectUpdateSummary()
+        local pt_sum = self:collectPatchUpdateSummary()
+        updates_count = (p_sum.updates or 0) + (pt_sum.updates or 0)
+    end)
+
+    local dialog = StorefrontBrowserDialog:new{
         title = title,
         items = items,
         page = self.browser_state.page,
@@ -7391,8 +6647,18 @@ function AppStore:showBrowser(kind)
         scroll_offset = self.browser_state.scroll_offset,
         initial_focus = initial_focus,
         toolbar_buttons = toolbar_buttons,
+        current_tab = current_tab,
+        updates_count = updates_count,
+        on_tab_switch = function(tab_name)
+            self.browser_state.tab = tab_name
+            self.browser_state.kind = (tab_name == "Patches" and "patch" or "plugin")
+            self.browser_state.page = 1
+            self.browser_state.scroll_offset = nil
+            self:saveBrowserState()
+            self:reopenBrowser()
+        end,
         on_settings_tap = function()
-            self:showAppStoreSettingsDialog()
+            self:showStorefrontSettingsDialog()
         end,
         on_refresh = function() self:browserRefresh() end,
         on_filter = function() self:browserOpenFilter() end,
@@ -7468,301 +6734,30 @@ function AppStore:showBrowser(kind)
             self.browser_menu = nil
         end,
     }
-    -- Trapper is a process-wide singleton; only touch it here if we actually
-    -- showed a progress message above (long single-list page), so a normal
-    -- (short/paginated) rebuild never risks clearing an unrelated Trapper-driven
-    -- dialog that happens to be paused elsewhere in the app at the same time.
     if dialog._used_trapper_progress then
         Trapper:reset()
     end
     self.browser_menu = dialog
     UIManager:show(dialog)
-    -- Full refresh by default so a previous full-screen dialog (the other tab,
-    -- the installed manager) does not ghost through on partial-refresh devices;
-    -- narrowed to "partial" for plain page flips, which don't change the title/
-    -- chrome. See showUpdatesDialog for the rationale.
     local refresh_mode = self._browser_refresh_mode_hint or "full"
     self._browser_refresh_mode_hint = nil
     UIManager:setDirty(dialog, refresh_mode)
     end)
 end
 
-function AppStore:showFilterDialog()
-    self:ensureBrowserState()
-    local filters = self.browser_state
-    local prev_search_in_readme = filters.search_in_readme == true
-    local dialog
-    local check_readme
-    dialog = MultiInputDialog:new{
-        title = _("AppStore filters"),
-        fields = {
-            {
-                description = _("Search text"),
-                text = filters.search_text or "",
-                hint = _("Name, description, topic"),
-            },
-            {
-                description = _("Owner"),
-                text = filters.owner or "",
-                hint = "",
-            },
-            {
-                description = _("Minimum stars"),
-                input_type = "number",
-                text = (filters.min_stars and filters.min_stars > 0) and tostring(filters.min_stars) or "",
-                hint = "0",
-            },
-        },
-        buttons = {
-            {
-                {
-                    text = _("Cancel"),
-                    callback = function()
-                        UIManager:close(dialog)
-                    end,
-                },
-                {
-                    text = _("Clear filters"),
-                    callback = function()
-                        self.browser_state.search_text = ""
-                        self.browser_state.owner = ""
-                        self.browser_state.min_stars = 0
-                        self.browser_state.page = 1
-                        self.browser_state.scroll_offset = nil
-                        self.browser_state.search_in_readme = false
-                        self.readme_filter = nil
-                        self:saveBrowserState()
-                        UIManager:close(dialog)
-                        self:reopenBrowser()
-                    end,
-                },
-                {
-                    text = _("Apply"),
-                    is_enter_default = true,
-                    callback = function()
-                        local values = dialog:getFields()
-                        self.browser_state.search_text = util.trim(values[1] or "")
-                        self.browser_state.owner = util.trim(values[2] or "")
-                        local stars = tonumber(values[3]) or 0
-                        if stars < 0 then
-                            stars = 0
-                        end
-                        self.browser_state.min_stars = math.floor(stars)
-                        local enable_readme = false
-                        if check_readme then
-                            enable_readme = check_readme.checked and true or false
-                            self.browser_state.search_in_readme = enable_readme
-                        else
-                            self.browser_state.search_in_readme = self.browser_state.search_in_readme and true or false
-                            enable_readme = self.browser_state.search_in_readme
-                        end
-                        if enable_readme and not prev_search_in_readme and (not GitHub.hasAuthToken or not GitHub.hasAuthToken()) then
-                            UIManager:show(InfoMessage:new{
-                                text = _("GitHub token is not configured. README search may be rate limited."),
-                                timeout = 5,
-                            })
-                        end
-                        self.readme_filter = nil
-                        self.browser_state.page = 1
-                        self.browser_state.scroll_offset = nil
-                        self:saveBrowserState()
-                        local search_text = self.browser_state.search_text or ""
-                        local kind = self.browser_state.kind or "plugin"
-                        if enable_readme and search_text ~= "" then
-                            NetworkMgr:runWhenOnline(function()
-                                if not self.browser_state or not self.browser_state.search_in_readme then
-                                    return
-                                end
-                                if (self.browser_state.search_text or "") == "" then
-                                    return
-                                end
-                                self:updateReadmeFilter()
-                                UIManager:nextTick(function()
-                                    self:reopenBrowser()
-                                end)
-                            end)
-                        end
-                        UIManager:close(dialog)
-                        self:reopenBrowser()
-                    end,
-                },
-            },
-        },
-    }
-    check_readme = CheckButton:new{
-        text = _("Search in README"),
-        checked = filters.search_in_readme == true,
-        parent = dialog,
-    }
-    -- Insert checkbox visually between Search text and Owner.
-    dialog:addWidget(check_readme)
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
+function Storefront:showFilterDialog()
+    require("storefront_filter_dialog"):show(self)
 end
 
-function AppStore:showAppStoreSettingsDialog()
-    -- Opened via the gear icon on the browser title bar.
-    -- Keep the toggle list minimal; additional settings can be added below as
-    -- the plugin grows. The first entry is the Include 0-star forks toggle,
-    -- which controls whether `fork:only stars:0` is queried on refresh.
-    local current_kind = (self.browser_state and self.browser_state.kind) or "plugin"
-    local dialog
-
-    -- Frequent navigation actions, moved out of the list body so they are
-    -- reachable from any scroll position (also bound to the Menu key and r/f/s/t).
-    local buttons = {
-        {
-            {
-                text = current_kind == "plugin" and _("Switch to patches tab") or _("Switch to plugins tab"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:browserSwitchTab()
-                end,
-            },
-        },
-        {
-            {
-                text = _("Refresh cache"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:browserRefresh()
-                end,
-            },
-        },
-        {
-            {
-                text = self:getFilterSummary(),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:browserOpenFilter()
-                end,
-            },
-        },
-        {
-            {
-                text = self:getSortSummary(),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:browserAdvanceSort()
-                end,
-            },
-        },
-        {
-            {
-                text = current_kind == "plugin" and _("Manage installed plugins") or _("Manage installed patches"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:browserManageInstalled()
-                end,
-            },
-        },
-    }
-
-    -- Settings.
-    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
-    local mark = include_zero and "\xE2\x98\x91" or "\xE2\x98\x90"
-    table.insert(buttons, {
-        {
-            text = string.format("%s  %s", mark, _("Include 0-star forks")),
-            background = Blitbuffer.COLOR_WHITE,
-            callback = function()
-                AppStoreSettings:saveSetting(INCLUDE_ZERO_STAR_FORKS_KEY, not include_zero)
-                AppStoreSettings:flush()
-                UIManager:close(dialog)
-                self:showAppStoreSettingsDialog()
-            end,
-        },
-    })
-
-    local page_size = getBrowserPageSize()
-    table.insert(buttons, {
-        {
-            text = string.format(_("Items per page: %d"), page_size),
-            background = Blitbuffer.COLOR_WHITE,
-            callback = function()
-                UIManager:close(dialog)
-                UIManager:show(SpinWidget:new{
-                    title_text = _("Items per page"),
-                    value = page_size,
-                    value_min = MIN_BROWSER_PAGE_SIZE,
-                    value_max = MAX_BROWSER_PAGE_SIZE,
-                    ok_text = _("Set"),
-                    callback = function(spin)
-                        AppStoreSettings:saveSetting(BROWSER_PAGE_SIZE_KEY, spin.value)
-                        AppStoreSettings:flush()
-                        self.browser_state.page = 1
-                        self.browser_state.scroll_offset = nil
-                        self:saveBrowserState()
-                        self:reopenBrowser()
-                    end,
-                })
-            end,
-        },
-    })
-
-    if current_kind == "plugin" then
-        table.insert(buttons, {
-            {
-                text = _("Install plugin from URL"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:promptInstallPluginFromURL()
-                end,
-            },
-        })
-    else
-        table.insert(buttons, {
-            {
-                text = _("Install patch from URL"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    UIManager:close(dialog)
-                    self:promptInstallPatchFromURL()
-                end,
-            },
-        })
-    end
-    
-    table.insert(buttons, {
-        {
-            text = _("Clear cached README files"),
-            background = Blitbuffer.COLOR_WHITE,
-            callback = function()
-                UIManager:close(dialog)
-                self:clearCachedReadmeFiles()
-            end,
-        },
-    })
-    
-    table.insert(buttons, {
-        {
-            text = _("Close"),
-            background = Blitbuffer.COLOR_WHITE,
-            callback = function()
-                UIManager:close(dialog)
-            end,
-        },
-    })
-    
-    dialog = ButtonDialog:new{
-        title = _("AppStore settings"),
-        title_align = "center",
-        buttons = buttons,
-    }
-    UIManager:show(dialog)
+function Storefront:showStorefrontSettingsDialog()
+    require("storefront_settings_dialog"):show(self)
 end
 
--- Triggered from the AppStore settings dialog. Confirms with the user, then
+-- Triggered from the Storefront settings dialog. Confirms with the user, then
 -- removes every cached README markdown file produced by previous
 -- "View README" actions. The cached files are regenerated on demand the next
 -- time a README is opened, so deletion is non-destructive.
-function AppStore:clearCachedReadmeFiles()
+function Storefront:clearCachedReadmeFiles()
     local confirm
     confirm = ConfirmBox:new{
         text = _("Delete all cached README files? They will be re-downloaded on demand."),
@@ -7786,7 +6781,7 @@ function AppStore:clearCachedReadmeFiles()
     UIManager:show(confirm)
 end
 
-function AppStore:promptInstallPluginFromURL()
+function Storefront:promptInstallPluginFromURL()
     local dialog
     dialog = MultiInputDialog:new{
         title = _("Install plugin from GitHub"),
@@ -7836,7 +6831,7 @@ function AppStore:promptInstallPluginFromURL()
     UIManager:show(dialog)
 end
 
-function AppStore:fetchAndShowPluginRepo(owner, repo_name)
+function Storefront:fetchAndShowPluginRepo(owner, repo_name)
     if not owner or not repo_name then
         return
     end
@@ -7875,7 +6870,7 @@ function AppStore:fetchAndShowPluginRepo(owner, repo_name)
     end)
 end
 
-function AppStore:promptInstallPatchFromURL()
+function Storefront:promptInstallPatchFromURL()
     local dialog
     dialog = MultiInputDialog:new{
         title = _("Install patch from GitHub"),
@@ -7925,7 +6920,7 @@ function AppStore:promptInstallPatchFromURL()
     UIManager:show(dialog)
 end
 
-function AppStore:fetchAndShowPatchRepo(owner, repo_name)
+function Storefront:fetchAndShowPatchRepo(owner, repo_name)
     if not owner or not repo_name then
         return
     end
@@ -7975,7 +6970,7 @@ function AppStore:fetchAndShowPatchRepo(owner, repo_name)
     end)
 end
 
-function AppStore:showPatchRepoActionDialog(repo, entries)
+function Storefront:showPatchRepoActionDialog(repo, entries)
     if not repo or not entries then
         return
     end
@@ -8026,7 +7021,7 @@ function AppStore:showPatchRepoActionDialog(repo, entries)
     UIManager:show(dialog)
 end
 
-function AppStore:showPatchSelectionDialogForInstall(repo, entries)
+function Storefront:showPatchSelectionDialogForInstall(repo, entries)
     if not repo or not entries or #entries == 0 then
         return
     end
@@ -8065,8 +7060,8 @@ function AppStore:showPatchSelectionDialogForInstall(repo, entries)
     UIManager:show(dialog)
 end
 
-function AppStore:getStatusLines()
-    local status_lines = { _("AppStore") }
+function Storefront:getStatusLines()
+    local status_lines = { _("Storefront") }
     local plugin_count = Cache.countRepos and Cache.countRepos("plugin") or #Cache.listRepos("plugin")
     local patch_count = Cache.countRepos and Cache.countRepos("patch") or #Cache.listRepos("patch")
     local plugin_ts = Cache.getLastFetched("plugin")
@@ -8082,7 +7077,7 @@ function AppStore:getStatusLines()
         table.insert(status_lines, _("Patch cache is older than a week, consider refreshing."))
     end
 
-    local memo = AppStoreSettings:readSetting("status_text")
+    local memo = StorefrontSettings:readSetting("status_text")
     if memo and memo ~= "" then
         table.insert(status_lines, memo)
     end
@@ -8090,7 +7085,7 @@ function AppStore:getStatusLines()
     return status_lines
 end
 
-function AppStore:buildStatusWidget()
+function Storefront:buildStatusWidget()
     local group = VerticalGroup:new{}
     for _, line in ipairs(self:getStatusLines()) do
         group[#group + 1] = TextWidget:new{ text = line }
@@ -8103,7 +7098,7 @@ function AppStore:buildStatusWidget()
     }
 end
 
-function AppStore:buildListWidget(lines)
+function Storefront:buildListWidget(lines)
     local text = table.concat(lines, "\n")
     local default_face = nil
     if TextWidget.getDefaultFace then
@@ -8145,7 +7140,7 @@ end
 -- plugin-kind browse list. Cached in memory and only rebuilt when the
 -- install store actually changes (install/uninstall/match), instead of on
 -- every browser render (page flip, sort, filter change).
-function AppStore:getInstalledLookup()
+function Storefront:getInstalledLookup()
     local generation = InstallStore.getGeneration and InstallStore.getGeneration()
     local cache = self._installed_lookup_cache
     if cache and cache.generation == generation then
@@ -8168,7 +7163,7 @@ function AppStore:getInstalledLookup()
     return lookup
 end
 
-function AppStore:getRepoDescriptors(kind)
+function Storefront:getRepoDescriptors(kind)
     -- Cache the built descriptor list in memory: rebuilding it reads the whole
     -- repo cache from disk and allocates a table per repo (hundreds of them),
     -- which is the dominant cost when flipping pages. Invalidate when the cache's
@@ -8201,7 +7196,7 @@ function AppStore:getRepoDescriptors(kind)
     return descriptors
 end
 
-function AppStore:renderRepoLines(descriptors)
+function Storefront:renderRepoLines(descriptors)
     if #descriptors == 0 then
         return { _("No cached entries yet. Refresh to fetch from GitHub.") }
     end
@@ -8324,7 +7319,7 @@ local function detectPluginFromArchive(reader, repo)
             elseif repo_name then
                 plugin_dirname = sanitizePluginDirname(repo_name)
             else
-                plugin_dirname = sanitizePluginDirname("appstore")
+                plugin_dirname = sanitizePluginDirname("Storefront")
             end
         end
     elseif (not plugin_name or plugin_name == "") then
@@ -8489,22 +7484,22 @@ extractPluginToUserDir = function(reader, info, dest_root)
     return true, target_dir
 end
 
--- NOTE: appstore_configuration and the remembered-path settings key are
+-- NOTE: Storefront_configuration and the remembered-path settings key are
 -- resolved locally (rather than as file-level locals like the other
 -- *_KEY constants) because main.lua's chunk is already at LuaJIT's 200
 -- local variable ceiling; scoping them to this function keeps them out of
 -- that shared budget without changing behavior (require() is cached, so
 -- repeat calls are cheap).
-function AppStore:resolveNewInstallDestination(callback, on_cancel)
+function Storefront:resolveNewInstallDestination(callback, on_cancel)
     local REMEMBERED_PLUGIN_INSTALL_PATH_KEY = "remembered_plugin_install_path"
-    local ok_cfg, AppStoreConfig = pcall(require, "appstore_configuration")
+    local ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
     if not ok_cfg then
-        AppStoreConfig = {}
+        StorefrontConfig = {}
     end
 
-    local config_override = AppStoreConfig.plugin_install_path
-    local remembered_path = AppStoreSettings:readSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY)
-    local hidden_paths = AppStoreSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
+    local config_override = StorefrontConfig.plugin_install_path
+    local remembered_path = StorefrontSettings:readSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY)
+    local hidden_paths = StorefrontSettings:readSetting(PluginPaths.HIDDEN_PLUGIN_PATHS_KEY) or {}
 
     local dest_root, needs_prompt, candidates, all_hidden =
         PluginPaths.resolveInstallDestination(config_override, remembered_path, hidden_paths)
@@ -8549,8 +7544,8 @@ function AppStore:resolveNewInstallDestination(callback, on_cancel)
                 callback = function()
                     UIManager:close(dialog)
                     if remember_choice then
-                        AppStoreSettings:saveSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY, chosen_path)
-                        AppStoreSettings:flush()
+                        StorefrontSettings:saveSetting(REMEMBERED_PLUGIN_INSTALL_PATH_KEY, chosen_path)
+                        StorefrontSettings:flush()
                     end
                     callback(chosen_path)
                 end,
@@ -8580,7 +7575,7 @@ function AppStore:resolveNewInstallDestination(callback, on_cancel)
     UIManager:show(dialog)
 end
 
-function AppStore:promptRepoAction(repo)
+function Storefront:promptRepoAction(repo)
     local dialog
     local buttons_row = {}
 
@@ -8611,51 +7606,16 @@ function AppStore:promptRepoAction(repo)
         return
     end
 
-    if repo.kind == "plugin" then
-        table.insert(buttons_row, {
-            text = _("Install plugin"),
-            callback = function()
-                UIManager:close(dialog)
-                self:promptPluginInstallOptions(repo)
-            end,
-        })
-    end
-
-    table.insert(buttons_row, {
-        text = _("View README"),
-        callback = function()
-            UIManager:close(dialog)
-            self:showReadme(repo)
-        end,
-    })
-
-    local lines = {}
-    local description = normalizeDescription(repo.description)
-    if description ~= "" then
-        lines[#lines + 1] = description
-    end
-    local ts = repo.data and (repo.data.pushed_at or repo.data.updated_at or repo.data.created_at)
-    if ts and ts ~= "" then
-        if description ~= "" then
-            lines[#lines + 1] = ""
-        end
-        lines[#lines + 1] = string.format(_("Updated: %s"), ts:sub(1, 10))
-    end
-
-    dialog = ConfirmBox:new{
-        text = repo.full_name or repo.name or _("Repository"),
-        cancel_text = _("Close"),
-        no_ok_button = true,
-        other_buttons_first = true,
-        other_buttons = {
-            buttons_row,
-        },
+    local DetailsDialog = require("storefront_details_dialog")
+    local details_dialog = DetailsDialog:new{
+        Storefront = self,
+        repo = repo,
+        kind = "plugin",
     }
-    dialog:addWidget(makeTextBox(table.concat(lines, "\n")))
-    UIManager:show(dialog)
+    details_dialog:show()
 end
 
-function AppStore:installPluginFromRepo(repo)
+function Storefront:installPluginFromRepo(repo)
     if not repo then
         return
     end
@@ -8665,7 +7625,7 @@ function AppStore:installPluginFromRepo(repo)
     end)
 end
 
-function AppStore:_installPluginFromRepoInternal(repo)
+function Storefront:_installPluginFromRepoInternal(repo)
     if (repo.kind or "plugin") ~= "plugin" then
         UIManager:show(InfoMessage:new{
             text = _("Installation is currently only supported for plugins."),
@@ -8795,7 +7755,7 @@ function AppStore:_installPluginFromRepoInternal(repo)
     end
 end
 
-function AppStore:handlePostInstall(info, repo)
+function Storefront:handlePostInstall(info, repo)
     self:rememberInstall(info, repo)
     -- Ensure the screen refreshes after installation/update to clear any artifacts.
     UIManager:setDirty(nil, "full")
@@ -8825,7 +7785,7 @@ function AppStore:handlePostInstall(info, repo)
     end
 end
 
-function AppStore:showRepoList(kind, title)
+function Storefront:showRepoList(kind, title)
     local descriptors = self:getRepoDescriptors(kind)
     local lines = self:renderRepoLines(descriptors)
     local dialog
@@ -8849,7 +7809,7 @@ function AppStore:showRepoList(kind, title)
     UIManager:show(dialog)
 end
 
-function AppStore:promptSelection(descriptors, title)
+function Storefront:promptSelection(descriptors, title)
     if #descriptors == 0 then
         UIManager:show(InfoMessage:new{ text = _("No cached entries yet."), timeout = 4 })
         return
@@ -8884,7 +7844,7 @@ function AppStore:promptSelection(descriptors, title)
     UIManager:show(dialog)
 end
 
-function AppStore:showReadme(repo)
+function Storefront:showReadme(repo)
     local owner = repo.owner or (repo.data and repo.data.owner and repo.data.owner.login)
     if not owner or not repo.name then
         UIManager:show(InfoMessage:new{ text = _("Missing repository metadata for README download."), timeout = 4 })
@@ -8988,7 +7948,7 @@ local function buildRateLimitMessage()
     if GitHub.hasAuthToken() then
         return _("GitHub API rate limit exceeded. Please wait a few minutes and try again.")
     end
-    return _("GitHub API rate limit exceeded. Add a GitHub token in AppStore settings to increase the limit (10→30 req/min).")
+    return _("GitHub API rate limit exceeded. Add a GitHub token in Storefront settings to increase the limit (10→30 req/min).")
 end
 
 -- Issue one Search API call for `query` at the given page. Returns
@@ -9005,7 +7965,7 @@ local function performSearchPage(query, page, per_page)
     })
     if not response then
         if type(err) == "table" and err.is_fine_grained_unsupported then
-            error(_("GitHub rejected this request: fine-grained personal access tokens are not supported for search. Please use a classic token instead (see the AppStore README)."))
+            error(_("GitHub rejected this request: fine-grained personal access tokens are not supported for search. Please use a classic token instead (see the Storefront README)."))
         end
         if type(err) == "table" and err.is_rate_limit then
             error(buildRateLimitMessage())
@@ -9058,7 +8018,7 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
 
     local first_response, first_err = performSearchPage(query, 1, 100)
     if not first_response then
-        logger.warn("AppStore search first-page error", query, first_err and first_err.body or first_err)
+        logger.warn("Storefront search first-page error", query, first_err and first_err.body or first_err)
         return
     end
 
@@ -9073,13 +8033,13 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
 
     if total_count < SEARCH_RESULT_LIMIT or depth >= SEARCH_DATE_BISECT_MAX_DEPTH then
         if total_count >= SEARCH_RESULT_LIMIT then
-            logger.warn("AppStore: date bisect depth limit reached, some results may be lost", query, total_count)
+            logger.warn("Storefront: date bisect depth limit reached, some results may be lost", query, total_count)
         end
         -- Fetch remaining pages if there could be more results beyond page 1.
         if #first_items >= 100 then
             local err = paginateFromPage(query, append, 2)
             if err then
-                logger.warn("AppStore pagination error", query, err)
+                logger.warn("Storefront pagination error", query, err)
             end
         end
         return
@@ -9088,7 +8048,7 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
     -- total_count >= 1000 — bisect by created date. We skip paginating the
     -- flat query (the legacy probe path did the same) because the bisected
     -- sub-queries will cover the remaining ranks via their date windows.
-    logger.info("AppStore: query has", total_count, "results (>=1000), bisecting by date", query)
+    logger.info("Storefront: query has", total_count, "results (>=1000), bisecting by date", query)
     local from_ts = date_from and dateToTimestamp(date_from) or dateToTimestamp(SEARCH_ORIGIN_DATE)
     local to_ts = date_to and dateToTimestamp(date_to) or os.time()
 
@@ -9097,7 +8057,7 @@ local function exhaustiveSearch(base_query, append, date_from, date_to, depth)
         if #first_items >= 100 then
             local err = paginateFromPage(query, append, 2)
             if err then
-                logger.warn("AppStore pagination error (tiny range)", query, err)
+                logger.warn("Storefront pagination error (tiny range)", query, err)
             end
         end
         return
@@ -9122,7 +8082,7 @@ local function exhaustiveSearchAdaptive(base_topic_query, branch_suffix, append,
 
     local first_response, first_err = performSearchPage(query, 1, 100)
     if not first_response then
-        logger.warn("AppStore adaptive search first-page error", query, first_err and first_err.body or first_err)
+        logger.warn("Storefront adaptive search first-page error", query, first_err and first_err.body or first_err)
         return
     end
 
@@ -9137,7 +8097,7 @@ local function exhaustiveSearchAdaptive(base_topic_query, branch_suffix, append,
         if #first_items >= 100 then
             local err = paginateFromPage(query, append, 2)
             if err then
-                logger.warn("AppStore adaptive pagination error", query, err)
+                logger.warn("Storefront adaptive pagination error", query, err)
             end
         end
         return
@@ -9146,15 +8106,15 @@ local function exhaustiveSearchAdaptive(base_topic_query, branch_suffix, append,
     -- Over the 1000-result cap: fall back to the legacy star split for this
     -- branch and let exhaustiveSearch handle date bisection if any sub-query
     -- still overflows.
-    logger.info("AppStore: adaptive branch exceeded limit, falling back to star split",
+    logger.info("Storefront: adaptive branch exceeded limit, falling back to star split",
         query, total_count)
-    local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+    local include_zero = StorefrontSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
     for _, suffix in ipairs(starSplitSuffixes(branch, include_zero)) do
         exhaustiveSearch(base_topic_query .. suffix, append)
     end
 end
 
-function AppStore:fetchAndStore(kind, topics, label, name_queries)
+function Storefront:fetchAndStore(kind, topics, label, name_queries)
     local collected = {}
     local seen = {}
     local function append(repo)
@@ -9176,7 +8136,7 @@ function AppStore:fetchAndStore(kind, topics, label, name_queries)
             -- Non-fork branch (default GitHub behavior excludes forks).
             exhaustiveSearchAdaptive(base_topic_query, NON_FORK_SUFFIX, append, "nonfork")
             -- Fork branch: suffix honors `include_zero_star_forks` server-side.
-            local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+            local include_zero = StorefrontSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
             local fork_suffix = include_zero and FORK_ANY_STARS_SUFFIX or FORK_WITH_STARS_SUFFIX
             exhaustiveSearchAdaptive(base_topic_query, fork_suffix, append, "fork")
         end
@@ -9184,7 +8144,7 @@ function AppStore:fetchAndStore(kind, topics, label, name_queries)
 
     -- Name-based queries: same adaptive two-branch approach per base query.
     if name_queries then
-        local include_zero = AppStoreSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+        local include_zero = StorefrontSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
         local fork_suffix = include_zero and FORK_ANY_STARS_SUFFIX or FORK_WITH_STARS_SUFFIX
         for _, base_query in ipairs(name_queries) do
             if base_query and base_query ~= "" then
@@ -9198,7 +8158,7 @@ function AppStore:fetchAndStore(kind, topics, label, name_queries)
     return #collected
 end
 
-function AppStore:refreshCache(kind)
+function Storefront:refreshCache(kind)
     if self.is_refreshing then
         return
     end
@@ -9213,7 +8173,7 @@ function AppStore:refreshCache(kind)
     self.is_refreshing = true
     self.patch_cache = {}
     self._repo_descriptors_cache = nil
-    local progress = InfoMessage:new{ text = _("Refreshing AppStore cache..."), timeout = 0 }
+    local progress = InfoMessage:new{ text = _("Refreshing Storefront cache..."), timeout = 0 }
     UIManager:show(progress)
 
     local summary
@@ -9230,54 +8190,57 @@ function AppStore:refreshCache(kind)
         end
         summary = table.concat(summary_parts, " ")
         if summary == "" then
-            summary = _("AppStore cache refreshed.")
+            summary = _("Storefront cache refreshed.")
         end
-        AppStoreSettings:saveSetting("status_text", summary)
-        AppStoreSettings:flush()
+        StorefrontSettings:saveSetting("status_text", summary)
+        StorefrontSettings:flush()
     end)
 
     UIManager:close(progress)
     self.is_refreshing = false
 
     if ok then
-        UIManager:show(InfoMessage:new{ text = summary or _("AppStore cache refreshed."), timeout = 5 })
+        UIManager:show(InfoMessage:new{ text = summary or _("Storefront cache refreshed."), timeout = 5 })
     else
         local message = tostring(err)
-        UIManager:show(InfoMessage:new{ text = _("AppStore refresh failed: ") .. message, timeout = 6 })
+        UIManager:show(InfoMessage:new{ text = _("Storefront refresh failed: ") .. message, timeout = 6 })
     end
 end
 
-function AppStore:init()
+function Storefront:init()
     self.cache_dir = ensureCacheDir()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
 end
 
-function AppStore:addToMainMenu(menu_items)
-    menu_items.AppStore = {
+function Storefront:addToMainMenu(menu_items)
+    menu_items.Storefront = {
         sorting_hint = "tools",
-        text = _("App Store"),
+        text = _("Storefront"),
         callback = function()
             self:showBrowser()
         end,
     }
 end
 
-function AppStore:onDispatcherRegisterActions()
-    Dispatcher:registerAction("AppStore_open", {
+function Storefront:onDispatcherRegisterActions()
+    Dispatcher:registerAction("storefront_open", {
         category = "none",
-        event = "OpenAppStoreMenu",
-        title = _("Open AppStore"),
+        event = "OpenStorefrontMenu",
+        title = _("Open Storefront"),
         general = true,
     })
 end
 
-function AppStore:onOpenAppStoreMenu()
+function Storefront:onOpenStorefrontMenu()
     UIManager:nextTick(function()
         self:showBrowser()
     end)
 end
+Storefront.listInstalledPlugins = listInstalledPlugins
+Storefront.listInstalledPatches = listInstalledPatches
+Storefront.getInstallRecordsMap = getInstallRecordsMap
+Storefront.getPatchRecordsMap = getPatchRecordsMap
 
-
-return AppStore
+return Storefront
 

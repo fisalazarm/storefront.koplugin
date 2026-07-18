@@ -1,17 +1,17 @@
-﻿local http = require("socket.http")
+local http = require("socket.http")
 local json = require("json")
 local url = require("socket.url")
 local logger = require("logger")
 
-local ok_cfg, AppStoreConfig = pcall(require, "appstore_configuration")
+local ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
 if not ok_cfg then
-    AppStoreConfig = {}
+    StorefrontConfig = {}
 end
 
 local GitHubClient = {}
 
 local BASE_URL = "https://api.github.com"
-local USER_AGENT = "KOReader-AppStore"
+local USER_AGENT = "KOReader-Storefront"
 
 local function joinQueryParts(parts)
     if not parts or #parts == 0 then
@@ -30,7 +30,7 @@ local function newTableSink(target)
 end
 
 local function getAuthHeaders()
-    local auth = AppStoreConfig.auth and AppStoreConfig.auth.github
+    local auth = StorefrontConfig.auth and StorefrontConfig.auth.github
     if not auth then
         return nil
     end
@@ -50,7 +50,7 @@ local function request(path, query)
     if query and query ~= "" then
         target = target .. "?" .. query
     end
-    logger.dbg("AppStore HTTP", target)
+    logger.dbg("Storefront HTTP", target)
     local headers = {
         ["Accept"] = "application/vnd.github+json",
         ["User-Agent"] = USER_AGENT,
@@ -130,7 +130,7 @@ function GitHubClient.searchRepositories(opts)
 end
 
 function GitHubClient.hasAuthToken()
-    local auth = AppStoreConfig.auth and AppStoreConfig.auth.github
+    local auth = StorefrontConfig.auth and StorefrontConfig.auth.github
     if not auth then
         return false
     end
@@ -270,5 +270,38 @@ function GitHubClient.fetchCompareCommits(owner, repo, base, head)
     return parsed, nil
 end
 
+-- Fetch the HTML representation of README.
+-- Returns raw HTML string, or nil + error.
+function GitHubClient.fetchReadmeHtml(owner, repo)
+    if not owner or not repo then
+        return nil, "missing parameters"
+    end
+    local path = string.format("/repos/%s/%s/readme", owner, repo)
+    local response_body = {}
+    local target = BASE_URL .. path
+    logger.dbg("Storefront HTTP readme html", target)
+    local headers = {
+        ["Accept"] = "application/vnd.github.html",
+        ["User-Agent"] = USER_AGENT,
+    }
+    local auth_headers = getAuthHeaders()
+    if auth_headers then
+        for key, value in pairs(auth_headers) do
+            headers[key] = value
+        end
+    end
+    local _, code = http.request{
+        url = target,
+        headers = headers,
+        sink = newTableSink(response_body),
+    }
+    local body = table.concat(response_body)
+    if tonumber(code) ~= 200 then
+        return nil, string.format("HTTP %s", tostring(code))
+    end
+    return body, nil
+end
+
 return GitHubClient
+
 

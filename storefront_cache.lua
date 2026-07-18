@@ -1,4 +1,4 @@
-﻿local DataStorage = require("datastorage")
+local DataStorage = require("datastorage")
 local SQ3 = require("lua-ljsqlite3/init")
 local ffiUtil = require("ffi/util")
 local util = require("util")
@@ -8,8 +8,8 @@ local logger = require("logger")
 local Cache = {}
 
 local DB_SCHEMA_VERSION = 20260426
-local DB_DIRECTORY = ffiUtil.joinPath(DataStorage:getDataDir(), "cache/appstore")
-local DB_PATH = ffiUtil.joinPath(DB_DIRECTORY, "appstore.sqlite3")
+local DB_DIRECTORY = ffiUtil.joinPath(DataStorage:getDataDir(), "cache/Storefront")
+local DB_PATH = ffiUtil.joinPath(DB_DIRECTORY, "Storefront.sqlite3")
 
 local SCHEMA_STATEMENTS = {
     [[CREATE TABLE IF NOT EXISTS repos (
@@ -49,7 +49,7 @@ local initialized = false
 local function ensureDirectory()
     local ok, err = util.makePath(DB_DIRECTORY)
     if not ok then
-        logger.warn("appstore cache directory creation failed", err)
+        logger.warn("Storefront cache directory creation failed", err)
     end
 end
 
@@ -266,7 +266,7 @@ local function execStatements(conn, statements)
             end
             local ok, err = pcall(conn.exec, conn, final_stmt)
             if not ok then
-                error(string.format("appstore cache schema error: %s -- %s", final_stmt, err))
+                error(string.format("Storefront cache schema error: %s -- %s", final_stmt, err))
             end
         end
     end
@@ -319,7 +319,7 @@ function Cache.storeRepos(kind, repos)
             if ok and type(serialized) == "string" then
                 encoded = serialized
             else
-                logger.warn("appstore cache encode error", serialized)
+                logger.warn("Storefront cache encode error", serialized)
             end
             stmt:bind(
                 normalizeNumber(repo.id),
@@ -349,7 +349,7 @@ local function decodeRow(row)
         if ok then
             decoded = parsed
         else
-            logger.warn("appstore cache decode error", parsed)
+            logger.warn("Storefront cache decode error", parsed)
         end
     end
     return {

@@ -1,4 +1,4 @@
--- appstore_plugin_paths.lua
+-- Storefront_plugin_paths.lua
 local DataStorage = require("datastorage")
 local ffiUtil = require("ffi/util")
 local lfs = require("libs/libkoreader-lfs")
@@ -77,12 +77,12 @@ function M.getCustomLookupPaths()
     return custom
 end
 
--- AppStoreSettings key for the user's per-path hide/show preference (an
+-- StorefrontSettings key for the user's per-path hide/show preference (an
 -- array of path strings, compared by resolved real path -- see
 -- isPathHidden). Exposed here as a field on this module's table, rather
 -- than as a main.lua file-level local, because main.lua's chunk is
 -- already at LuaJIT's 200-local ceiling (see the NOTE above
--- AppStore:resolveNewInstallDestination in main.lua).
+-- Storefront:resolveNewInstallDestination in main.lua).
 M.HIDDEN_PLUGIN_PATHS_KEY = "hidden_plugin_paths"
 
 -- Returns whether `path` resolves (via ffiUtil.realpath) to the same real
@@ -126,8 +126,8 @@ end
 -- Resolves the directory a freshly installed (non-update) plugin should be
 -- written to.
 --
--- config_override: string|nil  -- `plugin_install_path` from appstore_configuration.lua
--- remembered_path:  string|nil -- previously remembered choice (AppStoreSettings)
+-- config_override: string|nil  -- `plugin_install_path` from Storefront_configuration.lua
+-- remembered_path:  string|nil -- previously remembered choice (StorefrontSettings)
 -- hidden_paths:     table|nil  -- paths the user hid via "Manage plugin paths"
 --                                 (same shape as isPathHidden's 2nd arg)
 --

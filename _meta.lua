@@ -1,9 +1,9 @@
 ﻿local _ = require("gettext")
 
 return {
-    name = "appstore",
-    fullname = _("App Store"),
+    name = "storefront",
+    fullname = _("Storefront"),
     description = _([[Discover and manage community plugins and patches from GitHub topics.]]),
-    version = "1.10.0",
+    version = "26.7.17",
 }
 

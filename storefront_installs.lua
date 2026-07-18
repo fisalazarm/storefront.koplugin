@@ -1,4 +1,4 @@
-﻿local DataStorage = require("datastorage")
+local DataStorage = require("datastorage")
 local LuaSettings = require("luasettings")
 local json = require("json")
 local logger = require("logger")
@@ -6,7 +6,7 @@ local logger = require("logger")
 local InstallStore = {}
 
 local SETTINGS_DIR = DataStorage:getSettingsDir()
-local SETTINGS_PATH = SETTINGS_DIR .. "/appstore_installs.lua"
+local SETTINGS_PATH = SETTINGS_DIR .. "/Storefront_installs.lua"
 local settings = LuaSettings:open(SETTINGS_PATH)
 
 local store_key = "installs"
@@ -39,7 +39,7 @@ local function readStore()
         return json.decode(encoded)
     end)
     if not ok or type(decoded) ~= "table" then
-        logger.warn("appstore installs decode error", decoded)
+        logger.warn("Storefront installs decode error", decoded)
         return normalizeData({})
     end
     return normalizeData(decoded)
@@ -51,7 +51,7 @@ local function writeStore(data)
         return json.encode(payload)
     end)
     if not ok then
-        logger.warn("appstore installs encode error", encoded)
+        logger.warn("Storefront installs encode error", encoded)
         return false
     end
     settings:saveSetting(store_key, encoded)
