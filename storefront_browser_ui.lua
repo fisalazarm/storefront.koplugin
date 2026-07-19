@@ -428,6 +428,7 @@ function StorefrontBrowserDialog:init()
             height = sc(36),
             radius = sc(18),
             bordersize = 0,
+            menu_style = true,
             background = nil,
             callback = function()
                 if self.on_refresh then

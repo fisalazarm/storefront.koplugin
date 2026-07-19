@@ -33,11 +33,7 @@ function StorefrontUpdatesUi:init(StorefrontClass)
                 if has_update then
                     remote_display = remote_ver or _("new")
                 else
-                    if remote then
-                        remote_display = _("latest")
-                    else
-                        remote_display = _("unknown")
-                    end
+                    remote_display = _("latest")
                 end
                 
                 table.insert(merged, {
@@ -105,11 +101,7 @@ function StorefrontUpdatesUi:init(StorefrontClass)
                 if has_update then
                     remote_display = remote_ver
                 else
-                    if remote_entry then
-                        remote_display = _("latest")
-                    else
-                        remote_display = _("unknown")
-                    end
+                    remote_display = _("latest")
                 end
 
                 table.insert(merged, {
