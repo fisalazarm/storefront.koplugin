@@ -165,9 +165,9 @@ function StorefrontDetailsDialog:init()
                 callback = function()
                     self:onClose()
                     if self.patch then
-                        self.Storefront:promptPatchUpdateAction(self.update_item)
+                        self.Storefront:installPatchFromRepo(self.repo, self.patch)
                     else
-                        self.Storefront:promptUpdateAction(self.update_item.plugin or self.repo, self.update_item.record)
+                        self.Storefront:installPluginFromRepo(self.repo)
                     end
                 end,
             },
@@ -268,7 +268,7 @@ function StorefrontDetailsDialog:init()
     local readme_h = self.screen_h - frame_padding - back_h - header_h - pager_h
     if readme_h < sc(80) then readme_h = sc(80) end
 
-    local readme_css = "body { margin: 0 !important; padding: 0 !important; } img { max-width: 100%; height: auto; }"
+    local readme_css = "body, .markdown-body, div { margin: 0 !important; padding: 0 !important; } p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote { margin-top: 0.5em !important; margin-bottom: 0.5em !important; } img { max-width: 100%; height: auto; }"
 
     local html_box = HtmlBoxWidget:new{
         dimen = Geom:new{ w = readme_w, h = readme_h },

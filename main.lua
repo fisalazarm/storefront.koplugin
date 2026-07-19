@@ -56,8 +56,6 @@ local logger = require("logger")
 local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront.lua"
 local StorefrontSettings = LuaSettings:open(SETTINGS_PATH)
 
-local ALLOW_DELETE_UNLINKED_PLUGINS_KEY = "allow_delete_unlinked_plugins"
-local ALLOW_DELETE_UNLINKED_PATCHES_KEY = "allow_delete_unlinked_patches"
 local IGNORED_RELEASES_KEY = "ignored_releases"
 
 local STALE_WARNING_SECONDS = 7 * 24 * 3600
@@ -452,6 +450,7 @@ function Storefront:_refreshPatchUpdatesInternal(records)
     if self.patch_updates_menu then
         self:updatePatchUpdatesDialog()
     end
+    self:savePatchUpdatesState()
 
     UIManager:show(InfoMessage:new{ text = message, timeout = 5 })
     UIManager:setDirty(nil, "full")
@@ -664,6 +663,16 @@ local function buildPatchSummary(remote_info)
         end
         local local_sha = computeFileSha1(installed_patch.path)
         local remote_entry = remote_info and remote_info[installed_patch.filename]
+        if not remote_entry and record and record.owner and record.repo then
+            local repo, file_map = Cache.findPatchRepoAndFile(installed_patch.filename)
+            if file_map then
+                remote_entry = {
+                    remote_sha = file_map.sha,
+                    download_url = file_map.download_url,
+                    is_cached_fallback = true,
+                }
+            end
+        end
         local remote_sha = (remote_entry and remote_entry.remote_sha)
             or (record and record.sha)
         -- installed_sha: the SHA recorded at install/update time.
@@ -1166,9 +1175,23 @@ local function getInstallRecordsMap()
     return records
 end
 
+function Storefront:saveUpdatesState()
+    if self.updates_state then
+        StorefrontSettings:saveSetting("updates_state", self.updates_state)
+        StorefrontSettings:flush()
+    end
+end
+
+function Storefront:savePatchUpdatesState()
+    if self.patch_updates_state then
+        StorefrontSettings:saveSetting("patch_updates_state", self.patch_updates_state)
+        StorefrontSettings:flush()
+    end
+end
+
 function Storefront:ensureUpdatesState()
     if not self.updates_state then
-        self.updates_state = {}
+        self.updates_state = StorefrontSettings:readSetting("updates_state") or {}
     end
     self.updates_state.filter_only_outdated = self.updates_state.filter_only_outdated or false
     self.updates_state.filter_only_linked = self.updates_state.filter_only_linked or false
@@ -1178,7 +1201,7 @@ end
 
 function Storefront:ensurePatchUpdatesState()
     if not self.patch_updates_state then
-        self.patch_updates_state = {}
+        self.patch_updates_state = StorefrontSettings:readSetting("patch_updates_state") or {}
     end
     self.patch_updates_state.filter_only_outdated = self.patch_updates_state.filter_only_outdated or false
     self.patch_updates_state.filter_only_linked = self.patch_updates_state.filter_only_linked or false
@@ -1200,7 +1223,85 @@ function Storefront:resetPageAndScroll(state, menu)
     end
 end
 
+function Storefront:autoMatchInstalled()
+    -- 1. Plugins
+    local records = getInstallRecordsMap()
+    local installed_plugins = listInstalledPlugins()
+    local unmatched_plugins = {}
+    for _, plugin in ipairs(installed_plugins) do
+        local record = records[plugin.dirname]
+        if not (record and record.owner and record.repo) then
+            table.insert(unmatched_plugins, plugin)
+        end
+    end
+
+    if #unmatched_plugins > 0 then
+        local cached_plugins = Cache.listRepos("plugin")
+        local name_map = {}
+        for _, repo in ipairs(cached_plugins) do
+            if repo.name then
+                local low_name = repo.name:lower()
+                if not name_map[low_name] then
+                    name_map[low_name] = repo
+                end
+                local clean = repo.name:gsub("%.koplugin$", ""):lower()
+                if not name_map[clean] then
+                    name_map[clean] = repo
+                end
+            end
+        end
+
+        for _, plugin in ipairs(unmatched_plugins) do
+            local clean_dirname = plugin.dirname:gsub("%.koplugin$", ""):lower()
+            local repo = name_map[clean_dirname]
+            if repo then
+                local record = {
+                    owner = repo.owner,
+                    repo = repo.name,
+                    repo_full_name = repo.full_name,
+                    repo_description = repo.description,
+                    repo_id = repo.repo_id,
+                    branch = repo.data and repo.data.default_branch or "main",
+                    matched_at = os.time(),
+                    is_auto_matched = true,
+                }
+                InstallStore.upsert(plugin.dirname, record)
+                logger.info("Storefront: auto-matched plugin", plugin.dirname, "to", repo.full_name)
+            end
+        end
+    end
+
+    -- 2. Patches
+    local patch_records = getPatchRecordsMap()
+    local installed_patches = listInstalledPatches()
+    for _, patch in ipairs(installed_patches) do
+        local record = patch_records[patch.filename]
+        if not (record and record.owner and record.repo and record.path) then
+            local repo, file_map = Cache.findPatchRepoAndFile(patch.filename)
+            if repo and file_map then
+                local record = {
+                    filename = patch.filename,
+                    owner = repo.owner,
+                    repo = repo.name,
+                    repo_full_name = repo.full_name,
+                    repo_id = repo.repo_id,
+                    repo_description = repo.description,
+                    branch = file_map.branch or repo.data and repo.data.default_branch or "HEAD",
+                    path = file_map.path,
+                    download_url = file_map.download_url,
+                    sha = file_map.sha,
+                    matched_at = os.time(),
+                    is_auto_matched = true,
+                }
+                InstallStore.upsertPatch(patch.filename, record)
+                logger.info("Storefront: auto-matched patch", patch.filename, "to", repo.full_name, file_map.path)
+            end
+        end
+    end
+end
+
 function Storefront:collectPatchUpdateSummary()
+    self:autoMatchInstalled()
     self:ensurePatchUpdatesState()
     return buildPatchSummary(self.patch_updates_state.remote_info)
 end
@@ -1219,6 +1320,7 @@ function Storefront:getPatchUpdatesSummaryText(summary)
 end
 
 function Storefront:collectUpdateSummary()
+    self:autoMatchInstalled()
     self:ensureUpdatesState()
     local records = getInstallRecordsMap()
     local installed = listInstalledPlugins()
@@ -1241,6 +1343,25 @@ function Storefront:collectUpdateSummary()
         end
 
         local remote = remote_info[plugin.dirname]
+        if not remote and tracked then
+            local cached_repo
+            if record.repo_id then
+                cached_repo = Cache.getRepo(record.repo_id)
+            end
+            if not cached_repo and record.owner and record.repo then
+                cached_repo = Cache.getRepoByName(record.owner, record.repo)
+            end
+            if cached_repo and cached_repo.data then
+                local pushed_at_str = cached_repo.data.pushed_at or cached_repo.data.updated_at
+                local remote_repo_ts = pushed_at_str and parseGitHubTimestamp(pushed_at_str) or 0
+                local remote_version = cached_repo.data.version
+                remote = {
+                    remote_version = remote_version,
+                    remote_repo_ts = remote_repo_ts,
+                    is_cached_fallback = true,
+                }
+            end
+        end
         local local_version = plugin.version
         local local_latest_ts = plugin.latest_mtime
         if not local_latest_ts or local_latest_ts == 0 then
@@ -1736,30 +1857,8 @@ function Storefront:showManagePluginPathsDialog()
 end
 
 function Storefront:showPluginUpdatesSettings()
-    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
-    local checkbox_text = allow_delete_unlinked and "☑ " or "☐ "
     local button_dialog
-    local buttons = {
-        {
-            {
-                text = checkbox_text .. _("Allow delete unlinked plugins"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    local new_value = not (StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false)
-                    StorefrontSettings:saveSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY, new_value)
-                    StorefrontSettings:flush()
-                    UIManager:close(button_dialog)
-                    UIManager:show(InfoMessage:new{
-                        text = new_value and _("Unlinked plugins can now be deleted") or _("Unlinked plugins cannot be deleted"),
-                        timeout = 2,
-                    })
-                    UIManager:nextTick(function()
-                        self:showPluginUpdatesSettings()
-                    end)
-                end,
-            },
-        },
-    }
+    local buttons = {}
 
     if #PluginPaths.getLookupPaths() > 1 then
         table.insert(buttons, {
@@ -1870,29 +1969,8 @@ function Storefront:showUpdatesDialog()
 end
 
 function Storefront:showPatchUpdatesSettings()
-    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
-    local checkbox_text = allow_delete_unlinked and "☑ " or "☐ "
     local button_dialog
     local buttons = {
-        {
-            {
-                text = checkbox_text .. _("Allow delete unlinked patches"),
-                background = Blitbuffer.COLOR_WHITE,
-                callback = function()
-                    local new_value = not (StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false)
-                    StorefrontSettings:saveSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY, new_value)
-                    StorefrontSettings:flush()
-                    UIManager:close(button_dialog)
-                    UIManager:show(InfoMessage:new{
-                        text = new_value and _("Unlinked patches can now be deleted") or _("Unlinked patches cannot be deleted"),
-                        timeout = 2,
-                    })
-                    UIManager:nextTick(function()
-                        self:showPatchUpdatesSettings()
-                    end)
-                end,
-            },
-        },
         {
             {
                 text = string.format(_("Items per page: %d"), getManagePageSize()),
@@ -2446,6 +2524,7 @@ function Storefront:checkAllUpdates()
         self.updates_state.remote_info = remote_info
         self.updates_state.last_checked = os.time()
         self:updateUpdatesDialog()
+        self:saveUpdatesState()
 
         local summary = self:collectUpdateSummary()
         local tracked_count = summary.tracked or #tracked
@@ -2465,10 +2544,11 @@ function Storefront:_checkAllUpdatesInternal(records)
     UIManager:show(progress)
     local remote_info = self.updates_state.remote_info or {}
     for _, record in ipairs(records) do
-        local remote_version, remote_repo_ts, err = self:fetchRemoteVersionForRecord(record)
+        local remote_version, remote_repo_ts, err, release_tag_name = self:fetchRemoteVersionForRecord(record)
         remote_info[record.dirname] = {
             remote_version = remote_version,
             remote_repo_ts = remote_repo_ts,
+            release_tag_name = release_tag_name,
             error = err,
             last_checked = os.time(),
         }
@@ -2477,6 +2557,7 @@ function Storefront:_checkAllUpdatesInternal(records)
     self.updates_state.remote_info = remote_info
     self.updates_state.last_checked = os.time()
     self:updateUpdatesDialog()
+    self:saveUpdatesState()
 
     local summary = self:collectUpdateSummary()
     local tracked = summary.tracked or #records
@@ -2546,7 +2627,7 @@ function Storefront:fetchRemoteVersionForRecord(record)
             self.updates_state.remote_info[dirname] = cached
         end
         
-        return release_version, release_ts, nil
+        return release_version, release_ts, nil, latest_release.tag_name
     end
     
     local meta_candidates = buildMetaPathCandidates(record)
@@ -3505,16 +3586,6 @@ function Storefront:deletePlugin(dirname, record)
     end
     local plugin = findInstalledPlugin(dirname)
     local display_name = plugin and (plugin.name or plugin.dirname) or dirname
-    local is_linked = record and record.owner and record.repo
-    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PLUGINS_KEY) or false
-    
-    if not is_linked and not allow_delete_unlinked then
-        UIManager:show(InfoMessage:new{
-            text = _("Cannot delete unlinked plugins. Enable 'Allow delete unlinked plugins' in settings."),
-            timeout = 4,
-        })
-        return
-    end
     
     local PluginLoader = require("pluginloader")
     local plugin_name = dirname:gsub("%.koplugin$", "")
@@ -3596,16 +3667,6 @@ function Storefront:deletePatch(filename, record)
         return
     end
     local display_name = filename
-    local is_linked = record and record.owner and record.repo
-    local allow_delete_unlinked = StorefrontSettings:readSetting(ALLOW_DELETE_UNLINKED_PATCHES_KEY) or false
-    
-    if not is_linked and not allow_delete_unlinked then
-        UIManager:show(InfoMessage:new{
-            text = _("Cannot delete unlinked patches. Enable 'Allow delete unlinked patches' in settings."),
-            timeout = 4,
-        })
-        return
-    end
     
     local confirm_box
     confirm_box = ConfirmBox:new{
@@ -3665,17 +3726,19 @@ function Storefront:_checkSinglePluginInternal(record)
     local plugin_name = record.dirname or _("plugin")
     local progress = InfoMessage:new{ text = string.format(_("Checking %s…"), plugin_name), timeout = 0 }
     UIManager:show(progress)
-    local remote_version, remote_repo_ts, err = self:fetchRemoteVersionForRecord(record)
+    local remote_version, remote_repo_ts, err, release_tag_name = self:fetchRemoteVersionForRecord(record)
     UIManager:close(progress)
     
     local cached = self.updates_state.remote_info[record.dirname] or {}
     cached.remote_version = remote_version
     cached.remote_repo_ts = remote_repo_ts
+    cached.release_tag_name = release_tag_name
     cached.error = err
     cached.last_checked = os.time()
     self.updates_state.remote_info[record.dirname] = cached
     
     self:updateUpdatesDialog()
+    self:saveUpdatesState()
 
     local message
     local plugin = findInstalledPlugin(record.dirname)

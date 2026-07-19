@@ -419,6 +419,113 @@ function Cache.getLastFetched(kind)
     end)
 end
 
+function Cache.findPatchRepoAndFile(filename)
+    if not filename or filename == "" then
+        return nil, nil
+    end
+    return withConnection(function(conn)
+        local stmt = conn:prepare([[
+            SELECT r.repo_id, r.kind, r.name, r.owner, r.full_name, r.description, r.stars, r.language, r.homepage, r.fetched_at, r.data,
+                   p.path, p.branch, p.sha, p.download_url
+            FROM patch_files p
+            JOIN repos r ON p.repo_id = r.repo_id
+            WHERE p.filename = ? AND r.kind = 'patch'
+            ORDER BY r.stars DESC
+            LIMIT 1;
+        ]])
+        stmt:bind(filename)
+        local row = stmt:step()
+        if not row then
+            stmt:close()
+            return nil, nil
+        end
+        local row_map = {
+            repo_id = row[1],
+            kind = row[2],
+            name = row[3],
+            owner = row[4],
+            full_name = row[5],
+            description = row[6],
+            stars = row[7],
+            language = row[8],
+            homepage = row[9],
+            fetched_at = row[10],
+            data = row[11],
+        }
+        local file_map = {
+            path = row[12],
+            branch = row[13],
+            sha = row[14],
+            download_url = row[15],
+        }
+        stmt:close()
+        return decodeRow(row_map), file_map
+    end)
+end
+
+function Cache.getRepo(repo_id)
+    repo_id = tonumber(repo_id)
+    if not repo_id then
+        return nil
+    end
+    return withConnection(function(conn)
+        local stmt = conn:prepare([[SELECT repo_id, kind, name, owner, full_name, description, stars, language, homepage, fetched_at, data
+            FROM repos WHERE repo_id = ? LIMIT 1;]])
+        stmt:bind(repo_id)
+        local row = stmt:step()
+        if not row then
+            stmt:close()
+            return nil
+        end
+        local row_map = {
+            repo_id = row[1],
+            kind = row[2],
+            name = row[3],
+            owner = row[4],
+            full_name = row[5],
+            description = row[6],
+            stars = row[7],
+            language = row[8],
+            homepage = row[9],
+            fetched_at = row[10],
+            data = row[11],
+        }
+        stmt:close()
+        return decodeRow(row_map)
+    end)
+end
+
+function Cache.getRepoByName(owner, name)
+    if not owner or not name then
+        return nil
+    end
+    return withConnection(function(conn)
+        local stmt = conn:prepare([[SELECT repo_id, kind, name, owner, full_name, description, stars, language, homepage, fetched_at, data
+            FROM repos WHERE owner = ? AND name = ? LIMIT 1;]])
+        stmt:bind(owner, name)
+        local row = stmt:step()
+        if not row then
+            stmt:close()
+            return nil
+        end
+        local row_map = {
+            repo_id = row[1],
+            kind = row[2],
+            name = row[3],
+            owner = row[4],
+            full_name = row[5],
+            description = row[6],
+            stars = row[7],
+            language = row[8],
+            homepage = row[9],
+            fetched_at = row[10],
+            data = row[11],
+        }
+        stmt:close()
+        return decodeRow(row_map)
+    end)
+end
+
 function Cache.clear()
     withConnection(function(conn)
         conn:exec("DELETE FROM repos;")

@@ -80,22 +80,24 @@ function StorefrontListItem:init()
         local desc_text = entry.description or ""
         local badge_text = entry.badge
 
-        -- Line 1: Name and Badge
-        local name_face = Font:getFace("NotoSerif-Bold.ttf", 22)
-        local name_w = TextWidget:new{
-            text = name_text,
-            face = name_face,
-            bold = true,
-            fgcolor = text_color,
-        }
-
         local badge_w
         local right_reserve = 0
         if badge_text then
             local is_update_btn = (badge_text == _("Update"))
-            local badge_face = Font:getFace("smallinfofont", is_update_btn and 16 or math.floor(name_face.orig_size * 0.8))
+            local is_current_btn = (badge_text == _("✓ Current"))
+            
+            local badge_face
+            if is_update_btn or is_current_btn then
+                badge_face = Font:getFace("smallinfofont", 16)
+            else
+                local name_face_size = 22
+                badge_face = Font:getFace("smallinfofont", math.floor(name_face_size * 0.8))
+            end
+
             local badge_bg = entry.bBg or (is_update_btn and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE)
-            local badge_fg = entry.bFg or (is_update_btn and Blitbuffer.COLOR_WHITE or Blitbuffer.COLOR_BLACK)
+            local badge_fg = entry.bFg or (is_update_btn and Blitbuffer.COLOR_WHITE or (is_current_btn and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK))
+            local badge_border_color = is_current_btn and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
+
             local badge_inner = TextWidget:new{
                 text = badge_text,
                 face = badge_face,
@@ -103,35 +105,30 @@ function StorefrontListItem:init()
             }
             local sc = function(val) return Device.screen:scaleBySize(val) end
             badge_w = FrameContainer:new{
-                padding_top = is_update_btn and sc(6) or sc(4),
-                padding_bottom = is_update_btn and sc(6) or sc(4),
-                padding_left = is_update_btn and sc(16) or sc(6),
-                padding_right = is_update_btn and sc(16) or sc(6),
-                bordersize = is_update_btn and 0 or Size.border.thin,
+                padding_top = (is_update_btn or is_current_btn) and sc(6) or sc(4),
+                padding_bottom = (is_update_btn or is_current_btn) and sc(6) or sc(4),
+                padding_left = (is_update_btn or is_current_btn) and sc(16) or sc(6),
+                padding_right = (is_update_btn or is_current_btn) and sc(16) or sc(6),
+                bordersize = is_update_btn and 0 or sc(1),
                 background = badge_bg,
-                radius = is_update_btn and sc(8) or 3,
+                color = badge_border_color,
+                radius = (is_update_btn or is_current_btn) and sc(8) or 3,
                 badge_inner,
             }
             right_reserve = badge_w:getSize().w + Size.padding.default
         end
 
-        local name_row
-        local row_h = name_w:getSize().h
-        if badge_w then
-            name_row = OverlapGroup:new{
-                dimen = Geom:new{ w = content_inner, h = row_h },
-                LeftContainer:new{
-                    dimen = Geom:new{ w = content_inner, h = row_h },
-                    name_w,
-                },
-                RightContainer:new{
-                    dimen = Geom:new{ w = content_inner, h = row_h },
-                    badge_w,
-                }
-            }
-        else
-            name_row = name_w
-        end
+        local text_w = content_inner - right_reserve
+
+        -- Line 1: Name
+        local name_face = Font:getFace("NotoSerif-Bold.ttf", 22)
+        local name_w = TextWidget:new{
+            text = name_text,
+            face = name_face,
+            bold = true,
+            fgcolor = text_color,
+            max_width = text_w,
+        }
 
         -- Line 2: Meta Line (owner · ★ stars · updated)
         local meta_parts = {}
@@ -153,13 +150,14 @@ function StorefrontListItem:init()
             text = meta_text,
             face = meta_face,
             fgcolor = Blitbuffer.COLOR_DARK_GRAY,
+            max_width = text_w,
         }
 
         local group
         if entry.is_update_item then
             group = VerticalGroup:new{
                 align = "left",
-                name_row,
+                name_w,
                 VerticalSpan:new{ width = 2 },
                 meta_w,
             }
@@ -169,7 +167,7 @@ function StorefrontListItem:init()
             local desc_lh = math.floor(desc_face.size * 1.4)
             local desc_w = TextBoxWidget:new{
                 text = desc_text,
-                width = content_inner,
+                width = text_w,
                 face = desc_face,
                 fgcolor = Blitbuffer.COLOR_BLACK,
                 alignment = "left",
@@ -181,7 +179,7 @@ function StorefrontListItem:init()
 
             group = VerticalGroup:new{
                 align = "left",
-                name_row,
+                name_w,
                 VerticalSpan:new{ width = 2 },
                 meta_w,
                 VerticalSpan:new{ width = 4 },
@@ -189,10 +187,30 @@ function StorefrontListItem:init()
             }
         end
 
+        local row_widget
+        local item_h = group:getSize().h
+        if badge_w then
+            local badge_h = badge_w:getSize().h
+            local total_h = math.max(item_h, badge_h)
+            row_widget = OverlapGroup:new{
+                dimen = Geom:new{ w = content_inner, h = total_h },
+                LeftContainer:new{
+                    dimen = Geom:new{ w = content_inner, h = total_h },
+                    group,
+                },
+                RightContainer:new{
+                    dimen = Geom:new{ w = content_inner, h = total_h },
+                    badge_w,
+                }
+            }
+        else
+            row_widget = group
+        end
+
         self.frame = FrameContainer:new{
             padding = Size.padding.default,
             bordersize = 0,
-            group,
+            row_widget,
         }
         self[1] = self.frame
         self.dimen = self.frame:getSize()

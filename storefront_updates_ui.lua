@@ -1,6 +1,7 @@
 local InfoMessage = require("ui/widget/infomessage")
 local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
+local Cache = require("storefront_cache")
 local _ = require("gettext")
 
 local StorefrontUpdatesUi = {}
@@ -27,7 +28,17 @@ function StorefrontUpdatesUi:init(StorefrontClass)
             
             if not self.updates_state.filter_only_outdated or has_update then
                 local local_ver = plugin.version or _("unknown")
-                local remote_ver = remote and (remote.release_tag_name or remote.remote_version) or _("unknown")
+                local remote_ver = remote and (remote.release_tag_name or remote.remote_version)
+                local remote_display
+                if has_update then
+                    remote_display = remote_ver or _("new")
+                else
+                    if remote then
+                        remote_display = _("latest")
+                    else
+                        remote_display = _("unknown")
+                    end
+                end
                 
                 table.insert(merged, {
                     name = plugin.name or plugin.dirname,
@@ -36,13 +47,42 @@ function StorefrontUpdatesUi:init(StorefrontClass)
                     updated = "",
                     kind_label = _("Plugin"),
                     description = record and record.repo_description or "",
-                    badge = has_update and _("Update") or _("Installed"),
+                    badge = has_update and _("Update") or _("✓ Current"),
                     is_entry = true,
                     keep_menu_open = true,
                     is_update_item = true,
-                    version_transition = local_ver .. " → " .. remote_ver,
+                    version_transition = local_ver .. " → " .. remote_display,
                     callback = function()
-                        self:promptUpdateAction(plugin, record)
+                        local DetailsDialog = require("storefront_details_dialog")
+                        local cached_repo
+                        if record then
+                            if record.repo_id then
+                                cached_repo = Cache.getRepo(record.repo_id)
+                            end
+                            if not cached_repo and record.owner and record.repo then
+                                cached_repo = Cache.getRepoByName(record.owner, record.repo)
+                            end
+                        end
+                        local repo = cached_repo or {
+                            name = record and record.repo or plugin.dirname,
+                            owner = record and record.owner or "",
+                            full_name = record and record.repo_full_name or "",
+                            id = record and record.repo_id or nil,
+                            description = record and record.repo_description or "",
+                            stars = 0,
+                            data = {
+                                owner = { login = record and record.owner or "" },
+                                default_branch = record and record.branch or "HEAD",
+                                stargazers_count = 0,
+                            }
+                        }
+                        local details_dialog = DetailsDialog:new{
+                            Storefront = self,
+                            repo = repo,
+                            kind = "update",
+                            update_item = { plugin = plugin, record = record, needs_update = has_update }
+                        }
+                        details_dialog:show()
                     end,
                 })
             end
@@ -57,9 +97,20 @@ function StorefrontUpdatesUi:init(StorefrontClass)
  
             if not self.patch_updates_state.filter_only_outdated or has_update then
                 local local_commit = (record and record.commit) or item.local_sha or ""
-                local remote_commit = (remote_entry and remote_entry.commit) or item.remote_sha or ""
+                local remote_commit = (remote_entry and remote_entry.remote_sha) or item.remote_sha or ""
                 local local_ver = local_commit ~= "" and ("sha " .. local_commit:sub(1, 5)) or _("unknown")
                 local remote_ver = remote_commit ~= "" and ("sha " .. remote_commit:sub(1, 5)) or _("unknown")
+
+                local remote_display
+                if has_update then
+                    remote_display = remote_ver
+                else
+                    if remote_entry then
+                        remote_display = _("latest")
+                    else
+                        remote_display = _("unknown")
+                    end
+                end
 
                 table.insert(merged, {
                     name = patch.filename or patch.path or _("patch"),
@@ -68,13 +119,51 @@ function StorefrontUpdatesUi:init(StorefrontClass)
                     updated = "",
                     kind_label = _("Patch"),
                     description = record and record.repo_description or "",
-                    badge = has_update and _("Update") or _("Installed"),
+                    badge = has_update and _("Update") or _("✓ Current"),
                     is_entry = true,
                     keep_menu_open = true,
                     is_update_item = true,
-                    version_transition = local_ver .. " → " .. remote_ver,
+                    version_transition = local_ver .. " → " .. remote_display,
                     callback = function()
-                        self:promptPatchUpdateAction(item)
+                        local DetailsDialog = require("storefront_details_dialog")
+                        local cached_repo
+                        if record then
+                            if record.repo_id then
+                                cached_repo = Cache.getRepo(record.repo_id)
+                            end
+                            if not cached_repo and record.owner and record.repo then
+                                cached_repo = Cache.getRepoByName(record.owner, record.repo)
+                            end
+                        end
+                        local repo = cached_repo or {
+                            name = record and record.repo or patch.filename,
+                            owner = record and record.owner or "",
+                            full_name = record and record.repo_full_name or "",
+                            id = record and record.repo_id or nil,
+                            description = record and record.repo_description or "",
+                            stars = 0,
+                            data = {
+                                owner = { login = record and record.owner or "" },
+                                default_branch = record and record.branch or "HEAD",
+                                stargazers_count = 0,
+                            }
+                        }
+                        local patch_entry = {
+                            filename = patch.filename,
+                            path = patch.path,
+                            display_path = record and record.path or patch.path,
+                            download_url = record and record.download_url,
+                            branch = record and record.branch or "HEAD",
+                            sha = record and record.sha,
+                        }
+                        local details_dialog = DetailsDialog:new{
+                            Storefront = self,
+                            repo = repo,
+                            patch = patch_entry,
+                            kind = "update",
+                            update_item = item
+                        }
+                        details_dialog:show()
                     end,
                 })
             end

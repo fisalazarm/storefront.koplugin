@@ -421,15 +421,14 @@ function StorefrontBrowserDialog:init()
         end
 
         local check_btn = Button:new{
-            text = _("Check all"),
             icon = "../plugins/storefront.koplugin/assets/rotate-cw",
-            icon_width = sc(16),
-            icon_height = sc(16),
-            text_font_size = 14,
-            padding = sc(8),
-            radius = sc(16),
+            icon_width = sc(20),
+            icon_height = sc(20),
+            width = sc(36),
+            height = sc(36),
+            radius = sc(18),
             bordersize = 0,
-            background = Blitbuffer.COLOR_BLACK,
+            background = nil,
             callback = function()
                 if self.on_refresh then
                     self.on_refresh()
@@ -437,7 +436,6 @@ function StorefrontBrowserDialog:init()
             end,
             show_parent = self,
         }
-        check_btn.label_widget.fgcolor = Blitbuffer.COLOR_WHITE
 
         self._updates_outdated_btn = outdated_btn
         self._updates_all_btn = all_btn
