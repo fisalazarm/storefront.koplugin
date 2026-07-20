@@ -159,7 +159,7 @@ function StorefrontSettingsCard.show(Storefront)
         -- Divider line
         table.insert(content_vg, LineWidget:new{
             dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.Color8(226),
+            background = Blitbuffer.COLOR_DARK_GRAY,
         })
 
         -- 2. Include 0-star forks Row
@@ -174,7 +174,7 @@ function StorefrontSettingsCard.show(Storefront)
         -- Divider line
         table.insert(content_vg, LineWidget:new{
             dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.Color8(226),
+            background = Blitbuffer.COLOR_DARK_GRAY,
         })
 
         -- 3. GitHub Token Row
@@ -198,7 +198,7 @@ function StorefrontSettingsCard.show(Storefront)
         -- Divider line
         table.insert(content_vg, LineWidget:new{
             dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.Color8(226),
+            background = Blitbuffer.COLOR_DARK_GRAY,
         })
 
         -- 4. Close Button Row

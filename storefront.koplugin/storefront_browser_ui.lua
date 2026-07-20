@@ -290,7 +290,7 @@ function StorefrontBrowserDialog:init()
             end
             if entry.separator and idx < #self.items then
                 list_group[#list_group + 1] = LineWidget:new{
-                    background = Blitbuffer.COLOR_LIGHT_GRAY,
+                    background = Blitbuffer.COLOR_DARK_GRAY,
                     dimen = Geom:new{ w = entry_width, h = Size.line.thin },
                 }
             else
@@ -390,8 +390,8 @@ function StorefrontBrowserDialog:init()
 
     local CenterContainer = require("ui/widget/container/centercontainer")
     self.footer = FrameContainer:new{
-        padding_top = sc(8),
-        padding_bottom = sc(8),
+        padding_top = sc(4),
+        padding_bottom = sc(4),
         bordersize = 0,
         CenterContainer:new{
             dimen = Geom:new{ w = self.width, h = sc(48) },
@@ -511,11 +511,11 @@ function StorefrontBrowserDialog:init()
     local tab_bar_height = tab_bar:getSize().h
     local footer_height = self.footer:getSize().h
     
-    local vertical_padding = Size.line.thin + 2 * Size.span.vertical_default
+    local divider_height = Size.line.thin + Size.span.vertical_default
     if self.toolbar then
-        vertical_padding = vertical_padding + Size.span.vertical_default
+        divider_height = divider_height + Size.span.vertical_default
     end
-    local body_height = self.screen_h - title_height - tab_bar_height - footer_height - toolbar_height - vertical_padding - sc(24)
+    local body_height = self.screen_h - title_height - tab_bar_height - footer_height - toolbar_height - divider_height
     if body_height < math.floor(self.screen_h * 0.5) then
         body_height = math.floor(self.screen_h * 0.5)
     end
@@ -534,7 +534,7 @@ function StorefrontBrowserDialog:init()
         align = "left",
         self.header,
         tab_bar,
-        LineWidget:new{ background = Blitbuffer.COLOR_LIGHT_GRAY, dimen = Geom:new{ w = self.width, h = Size.line.thin } },
+        LineWidget:new{ background = Blitbuffer.COLOR_DARK_GRAY, dimen = Geom:new{ w = self.width, h = Size.line.thin } },
         VerticalSpan:new{ width = Size.span.vertical_default },
     }
     if self.toolbar then
@@ -542,7 +542,6 @@ function StorefrontBrowserDialog:init()
         table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
     end
     table.insert(self.content, self.list_scroller)
-    table.insert(self.content, VerticalSpan:new{ width = Size.span.vertical_default })
     table.insert(self.content, self.footer)
 
     self[1] = FrameContainer:new{

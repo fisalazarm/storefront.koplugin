@@ -85,34 +85,37 @@ function StorefrontListItem:init()
         if badge_text then
             local is_update_btn = (badge_text == _("Update"))
             local is_current_btn = (badge_text == _("✓ Current"))
-            
+            local is_installed_badge = (badge_text == _("Installed"))
+
             local badge_face
-            if is_update_btn or is_current_btn then
-                badge_face = Font:getFace("smallinfofont", 16)
+            if is_update_btn or is_current_btn or is_installed_badge then
+                badge_face = Font:getFace("smallinfofont", 14)
             else
                 local name_face_size = 22
                 badge_face = Font:getFace("smallinfofont", math.floor(name_face_size * 0.8))
             end
 
-            local badge_bg = entry.bBg or (is_update_btn and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE)
-            local badge_fg = entry.bFg or (is_update_btn and Blitbuffer.COLOR_WHITE or (is_current_btn and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK))
+            local is_solid_inverted = (is_update_btn or is_installed_badge)
+            local badge_bg = entry.bBg or (is_solid_inverted and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_WHITE)
+            local badge_fg = entry.bFg or (is_solid_inverted and Blitbuffer.COLOR_WHITE or (is_current_btn and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK))
             local badge_border_color = is_current_btn and Blitbuffer.COLOR_DARK_GRAY or Blitbuffer.COLOR_BLACK
 
             local badge_inner = TextWidget:new{
                 text = badge_text,
                 face = badge_face,
+                bold = is_solid_inverted,
                 fgcolor = badge_fg,
             }
             local sc = function(val) return Device.screen:scaleBySize(val) end
             badge_w = FrameContainer:new{
-                padding_top = (is_update_btn or is_current_btn) and sc(6) or sc(4),
-                padding_bottom = (is_update_btn or is_current_btn) and sc(6) or sc(4),
-                padding_left = (is_update_btn or is_current_btn) and sc(16) or sc(6),
-                padding_right = (is_update_btn or is_current_btn) and sc(16) or sc(6),
-                bordersize = is_update_btn and 0 or sc(1),
+                padding_top = sc(4),
+                padding_bottom = sc(4),
+                padding_left = is_solid_inverted and sc(12) or sc(8),
+                padding_right = is_solid_inverted and sc(12) or sc(8),
+                bordersize = is_solid_inverted and 0 or sc(1),
                 background = badge_bg,
                 color = badge_border_color,
-                radius = (is_update_btn or is_current_btn) and sc(8) or 3,
+                radius = is_solid_inverted and sc(10) or sc(4),
                 badge_inner,
             }
             right_reserve = badge_w:getSize().w + Size.padding.default

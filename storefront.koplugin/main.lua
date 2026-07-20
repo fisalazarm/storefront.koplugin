@@ -1379,9 +1379,13 @@ function Storefront:collectUpdateSummary()
                 local remote_repo_ts = pushed_at_str and parseGitHubTimestamp(pushed_at_str) or 0
                 local remote_version = cached_repo.data.version
                 local prev_version = remote and (remote.release_tag_name or remote.remote_version)
+                -- Fix 3: Carry release_tag_name through the fallback so the version-compare
+                -- branch is taken in has_update logic (instead of timestamp-only).
+                local prev_release_tag = remote and remote.release_tag_name
                 remote = {
                     remote_version = prev_version or remote_version,
                     remote_repo_ts = remote_repo_ts,
+                    release_tag_name = prev_release_tag,
                     is_cached_fallback = true,
                 }
             end
@@ -1401,17 +1405,27 @@ function Storefront:collectUpdateSummary()
             
             if release_tag then
                 local release_version = parseVersionFromTag(release_tag)
-                
+
                 if release_version then
                     if local_version then
                         has_update = isVersionNewer(release_version, local_version)
                     else
+                        -- No local version to compare; fall back to publish timestamp.
                         has_update = release_ts > local_latest_ts
                     end
                 else
-                    has_update = release_ts > local_latest_ts
+                    -- Fix 2: Tag isn't parseable as semver. Before using timestamp,
+                    -- check if the raw tag text equals the local version (e.g. "v2.4.4"
+                    -- vs local "2.4.4"). Equal after stripping 'v' → not an update.
+                    local raw_tag = release_tag:gsub("^[vV]", "")
+                    local raw_local = local_version and tostring(local_version):gsub("^[vV]", "") or nil
+                    if raw_tag ~= "" and raw_local and raw_tag == raw_local then
+                        has_update = false
+                    else
+                        has_update = release_ts > local_latest_ts
+                    end
                 end
-                
+
                 if has_update and record.owner and record.repo then
                     if isReleaseIgnored(record.owner, record.repo, release_tag) then
                         has_update = false
@@ -1425,11 +1439,15 @@ function Storefront:collectUpdateSummary()
             else
                 local remote_version = remote.remote_version
                 local remote_repo_ts = remote.remote_repo_ts or 0
-                
-                if remote_repo_ts > local_latest_ts then
-                    has_update = true
-                elseif remote_version and local_version then
+
+                -- Fix 1: Version strings take strict priority over timestamp heuristic.
+                -- A repo push (README edit, CI fix, etc.) must NOT flag a plugin as
+                -- outdated when the version numbers are still equal.
+                if remote_version and local_version then
                     has_update = isVersionNewer(remote_version, local_version)
+                elseif remote_repo_ts > local_latest_ts then
+                    -- No version info at all; fall back to timestamp.
+                    has_update = true
                 end
             end
         end
@@ -2551,6 +2569,10 @@ function Storefront:checkAllUpdates()
         end
         self.updates_state.remote_info = remote_info
         self.updates_state.last_checked = os.time()
+        -- Fix 4: Bust the summary cache. The cache key is the remote_info table
+        -- reference, but we mutate it in-place, so the reference never changes and
+        -- stale has_update values survive. Clearing the cache forces recomputation.
+        self._cached_plugin_summary = nil
         self:updateUpdatesDialog()
         self:saveUpdatesState()
         UIManager:setDirty(nil, "full")
@@ -2576,6 +2598,8 @@ function Storefront:_checkAllUpdatesInternal(records)
     UIManager:close(progress)
     self.updates_state.remote_info = remote_info
     self.updates_state.last_checked = os.time()
+    -- Fix 4: bust summary cache (see companion note in subprocess path above)
+    self._cached_plugin_summary = nil
     self:updateUpdatesDialog()
     self:saveUpdatesState()
     UIManager:setDirty(nil, "full")
@@ -3747,7 +3771,8 @@ function Storefront:_checkSinglePluginInternal(record)
     cached.error = err
     cached.last_checked = os.time()
     self.updates_state.remote_info[record.dirname] = cached
-    
+    -- Fix 4: bust summary cache (remote_info mutated in-place; reference unchanged)
+    self._cached_plugin_summary = nil
     self:updateUpdatesDialog()
     self:saveUpdatesState()
 
@@ -5597,9 +5622,14 @@ parseGitHubTimestamp = function(value)
 end
 
 local function repoStarsValue(repo)
-    return tonumber(repo.stars)
-        or (repo.data and tonumber(repo.data.stargazers_count))
-        or 0
+    if type(repo) ~= "table" then return 0 end
+    local s = tonumber(repo.stars)
+    if s and s > 0 then return s end
+    if repo.data then
+        s = tonumber(repo.data.stargazers_count) or tonumber(repo.data.stars)
+        if s and s > 0 then return s end
+    end
+    return s or 0
 end
 
 local function repoUpdatedValue(repo)
@@ -6025,7 +6055,7 @@ function Storefront:matchesGeneralFilters(repo, filters)
 
     local min_stars = tonumber(filters.min_stars) or 0
     if min_stars > 0 then
-        local stars = tonumber(repo.stars) or 0
+        local stars = repoStarsValue(repo)
         if stars < min_stars then
             return false
         end
@@ -6366,6 +6396,27 @@ function Storefront:collectPatchEntries(repos)
     return self:sortPatchEntries(aggregated)
 end
 
+local function getRepoVersionOrDate(repo, installed_lookup)
+    local ver = repo.latest_version or repo.version or repo.tag_name or repo.release_tag
+    if not ver and repo.data then
+        ver = repo.data.tag_name or repo.data.latest_version or repo.data.version
+    end
+    if not ver and installed_lookup then
+        local inst = (repo.full_name and installed_lookup[repo.full_name]) or (repo.id and installed_lookup["id:" .. tostring(repo.id)])
+        if type(inst) == "table" then
+            ver = inst.version or inst.tag_name or inst.latest_version
+        end
+    end
+    if ver and type(ver) == "string" and ver ~= "" then
+        if not ver:match("^v") and ver:match("^%d") then
+            return "v" .. ver
+        end
+        return ver
+    end
+    local ts = repo.data and (repo.data.pushed_at or repo.data.created_at)
+    return (ts and type(ts) == "string") and ts:sub(1, 10) or ""
+end
+
 function Storefront:makeRepoMenuItem(repo, installed_lookup)
     local is_installed = false
     if installed_lookup then
@@ -6375,13 +6426,12 @@ function Storefront:makeRepoMenuItem(repo, installed_lookup)
             is_installed = true
         end
     end
-    local stars = tonumber(repo.stars) or 0
+    local stars = repoStarsValue(repo)
     local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
     local badge = is_installed and _("Installed") or nil
     local description = normalizeDescription(repo.description)
     local owner = getRepoOwner(repo) or ""
-    local ts = repo.data and (repo.data.pushed_at or repo.data.created_at)
-    local updated = (ts and type(ts) == "string") and ts:sub(1, 10) or ""
+    local updated = getRepoVersionOrDate(repo, installed_lookup)
 
     return {
         name = repo.name or repo.full_name or _("Repository"),
@@ -6440,32 +6490,32 @@ function Storefront:calculateDynamicPageSize(tab_name)
     local screen_h = Device.screen:getHeight()
     local sc = function(val) return Device.screen:scaleBySize(val) end
     
-    local title_height = sc(48) + 24
-    local tab_bar_height = 24 + sc(19)
-    local footer_height = sc(48) + 24
+    local title_height = sc(64)
+    local tab_bar_height = sc(38)
+    local footer_height = sc(56)
     
     local toolbar_height = 0
     if tab_name == "Updates" then
-        toolbar_height = sc(36) + 8
+        toolbar_height = sc(36) + Size.span.vertical_default
     end
     
-    local vertical_padding = Size.line.thin + 2 * Size.span.vertical_default
+    local divider_height = Size.line.thin + Size.span.vertical_default
     if tab_name == "Updates" then
-        vertical_padding = vertical_padding + Size.span.vertical_default
+        divider_height = divider_height + Size.span.vertical_default
     end
     
-    local body_height = screen_h - title_height - tab_bar_height - footer_height - toolbar_height - vertical_padding - sc(24)
+    local body_height = screen_h - title_height - tab_bar_height - toolbar_height - divider_height - footer_height
     if body_height < math.floor(screen_h * 0.5) then
         body_height = math.floor(screen_h * 0.5)
     end
     
     local item_height
     if tab_name == "Plugins" then
-        item_height = sc(105)
+        item_height = sc(102)
     elseif tab_name == "Patches" then
-        item_height = sc(100)
+        item_height = sc(102)
     else -- Updates
-        item_height = sc(70)
+        item_height = sc(82)
     end
     
     return math.max(1, math.floor(body_height / item_height))
@@ -7345,7 +7395,7 @@ function Storefront:getRepoDescriptors(kind)
             name = repo.name,
             full_name = repo.full_name,
             owner = owner,
-            stars = repo.stars or 0,
+            stars = (repo.stars and repo.stars > 0) and repo.stars or (repo.data and tonumber(repo.data.stargazers_count) or 0),
             language = repo.language,
             description = repo.description,
             homepage = repo.homepage,
@@ -8130,7 +8180,8 @@ local function performSearchPage(query, page, per_page)
             error(_("GitHub rejected this request: fine-grained personal access tokens are not supported for search. Please use a classic token instead (see the Storefront README)."))
         end
         if type(err) == "table" and err.is_rate_limit then
-            error(buildRateLimitMessage())
+            err.body = buildRateLimitMessage()
+            return nil, err
         end
     end
     return response, err
@@ -8380,7 +8431,30 @@ function Storefront:init()
     StorefrontSettings:flush()
 end
 
+local function injectStorefrontIntoToolsMenu()
+    local menu_orders = {
+        "ui/elements/reader_menu_order",
+        "ui/elements/filemanager_menu_order",
+    }
+    for _, order_path in ipairs(menu_orders) do
+        local ok, order = pcall(require, order_path)
+        if ok and type(order) == "table" and type(order.tools) == "table" then
+            local found = false
+            for _, id in ipairs(order.tools) do
+                if id == "Storefront" then
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                table.insert(order.tools, 2, "Storefront")
+            end
+        end
+    end
+end
+
 function Storefront:addToMainMenu(menu_items)
+    injectStorefrontIntoToolsMenu()
     menu_items.Storefront = {
         sorting_hint = "tools",
         text = _("Storefront"),

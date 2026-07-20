@@ -88,6 +88,11 @@ function Cache.init()
     
     local function indexRepos(repos)
         for _, repo in ipairs(repos) do
+            local s = tonumber(repo.stars) or 0
+            if s == 0 and repo.data then
+                s = tonumber(repo.data.stargazers_count) or tonumber(repo.data.stars) or 0
+                repo.stars = s
+            end
             if repo.repo_id then
                 _by_id[repo.repo_id] = repo
             end
@@ -141,7 +146,7 @@ function Cache.storeRepos(kind, repos)
             owner = owner_login,
             full_name = tostring(repo.full_name or ""),
             description = repo.description ~= json.null and tostring(repo.description or "") or "",
-            stars = tonumber(repo.stargazers_count) or 0,
+            stars = tonumber(repo.stargazers_count) or tonumber(repo.stars) or 0,
             language = repo.language ~= json.null and tostring(repo.language or "") or "",
             homepage = repo.homepage ~= json.null and tostring(repo.homepage or "") or "",
             fetched_at = fetched_at,
@@ -174,8 +179,10 @@ function Cache.listRepos(kind)
         table.insert(copy, r)
     end
     table.sort(copy, function(a, b)
-        if (a.stars or 0) ~= (b.stars or 0) then
-            return (a.stars or 0) > (b.stars or 0)
+        local sa = (a.stars and a.stars > 0) and a.stars or (a.data and tonumber(a.data.stargazers_count) or 0)
+        local sb = (b.stars and b.stars > 0) and b.stars or (b.data and tonumber(b.data.stargazers_count) or 0)
+        if sa ~= sb then
+            return sa > sb
         end
         return tostring(a.name):lower() < tostring(b.name):lower()
     end)

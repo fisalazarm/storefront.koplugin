@@ -38,6 +38,42 @@ local function download(url)
     return tonumber(code), table.concat(response)
 end
 
+local function downloadImage(url, dest, max_redirects)
+    max_redirects = max_redirects or 5
+    if max_redirects <= 0 then return false end
+    local f, err = io.open(dest, "wb")
+    if not f then return false end
+    local _, code, headers = http.request{
+        url = url,
+        sink = ltn12.sink.file(f),
+        headers = {
+            ["User-Agent"] = "KOReader-Storefront",
+        },
+        redirect = false,
+    }
+    code = tonumber(code)
+    if code == 200 then
+        return true
+    elseif (code == 301 or code == 302 or code == 303 or code == 307 or code == 308) and headers and headers.location then
+        os.remove(dest)
+        local new_url = headers.location
+        if not new_url:match("^https?://") then
+            local host = url:match("^(https?://[^/]+)")
+            if host then
+                if new_url:sub(1,1) == "/" then
+                    new_url = host .. new_url
+                else
+                    new_url = host .. "/" .. new_url
+                end
+            end
+        end
+        return downloadImage(new_url, dest, max_redirects - 1)
+    else
+        os.remove(dest)
+        return false
+    end
+end
+
 function RepoContent.stripMarkdown(text)
     if not text then return "" end
     -- Remove HTML comments
@@ -107,6 +143,36 @@ function RepoContent.fetchReadmeHtml(owner, repo)
     local dir = getCacheDir()
     local safe_owner = owner:gsub("[^%w_-]", "_")
     local safe_repo = repo:gsub("[^%w_-]", "_")
+    
+    -- Strip explicit width and height attributes so images expand to full width
+    body = body:gsub("(<img[^>]+)%s+width=[\"'][^\"']*[\"']", "%1")
+    body = body:gsub("(<img[^>]+)%s+height=[\"'][^\"']*[\"']", "%1")
+    body = body:gsub("(<img[^>]+style=[\"'][^\"']*)width:%s*[^;\"]+;?", "%1")
+
+    local image_idx = 1
+    body = body:gsub('(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)', function(prefix, raw_url, suffix)
+        -- Decode HTML entity query parameters (&amp; -> &) for signed S3 / GitHub user asset URLs
+        local url = raw_url:gsub("&amp;", "&")
+
+        -- SVG images (e.g. shields.io badges) cannot be rendered by MuPDF HTML box; strip them to prevent [image] text links
+        local is_svg = url:lower():match("%.svg") ~= nil
+        if is_svg then
+            return ""
+        end
+
+        local ext = url:match("%.(%w+)") or "png"
+        ext = ext:gsub("%?.*", ""):lower()
+        if #ext > 4 or ext == "" then ext = "png" end
+
+        local img_filename = string.format("%s_%s_img%d.%s", safe_owner, safe_repo, image_idx, ext)
+        local img_path = dir .. "/" .. img_filename
+        if downloadImage(url, img_path) then
+            image_idx = image_idx + 1
+            return prefix .. img_filename .. suffix
+        end
+        return ""
+    end)
+
     local path = string.format("%s/%s_%s_README.html", dir, safe_owner, safe_repo)
     local ok, write_err = util.writeToFile(body, path)
     if not ok then

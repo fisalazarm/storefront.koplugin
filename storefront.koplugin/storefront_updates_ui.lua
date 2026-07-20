@@ -27,8 +27,10 @@ function StorefrontUpdatesUi:init(StorefrontClass)
             local has_update = item.has_update
             
             if not self.updates_state.filter_only_outdated or has_update then
-                local local_ver = plugin.version or _("unknown")
-                local remote_ver = remote and (remote.release_tag_name or remote.remote_version)
+                -- Strip leading 'v'/'V' so "v2.4.4" displays as "2.4.4" consistently.
+                local local_ver = (plugin.version and tostring(plugin.version):gsub("^[vV]", "")) or _("unknown")
+                local remote_ver_raw = remote and (remote.release_tag_name or remote.remote_version)
+                local remote_ver = remote_ver_raw and tostring(remote_ver_raw):gsub("^[vV]", "") or nil
                 local remote_display
                 if has_update then
                     remote_display = remote_ver or _("new")

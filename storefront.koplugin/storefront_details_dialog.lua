@@ -268,7 +268,39 @@ function StorefrontDetailsDialog:init()
     local readme_h = self.screen_h - frame_padding - back_h - header_h - pager_h
     if readme_h < sc(80) then readme_h = sc(80) end
 
-    local readme_css = "body, .markdown-body, div { margin: 0 !important; padding: 0 !important; } p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote { margin-top: 0.5em !important; margin-bottom: 0.5em !important; } img { max-width: 100%; height: auto; }"
+    local ffiutil = require("ffi/util")
+    local lfs = require("libs/libkoreader-lfs")
+
+    local font_declarations = ""
+    local serif_path = ffiutil.realpath("fonts/noto/NotoSerif-Regular.ttf")
+    local serif_bold_path = ffiutil.realpath("fonts/noto/NotoSerif-Bold.ttf")
+    local sans_path = ffiutil.realpath("fonts/noto/NotoSans-Regular.ttf")
+    local sans_bold_path = ffiutil.realpath("fonts/noto/NotoSans-Bold.ttf")
+
+    if serif_path and lfs.attributes(serif_path) then
+        font_declarations = font_declarations .. string.format("\n@font-face { font-family: 'Noto Serif'; src: url('%s'); }", serif_path)
+    end
+    if serif_bold_path and lfs.attributes(serif_bold_path) then
+        font_declarations = font_declarations .. string.format("\n@font-face { font-family: 'Noto Serif'; font-weight: bold; src: url('%s'); }", serif_bold_path)
+    end
+    if sans_path and lfs.attributes(sans_path) then
+        font_declarations = font_declarations .. string.format("\n@font-face { font-family: 'Noto Sans'; src: url('%s'); }", sans_path)
+    end
+    if sans_bold_path and lfs.attributes(sans_bold_path) then
+        font_declarations = font_declarations .. string.format("\n@font-face { font-family: 'Noto Sans'; font-weight: bold; src: url('%s'); }", sans_bold_path)
+    end
+
+    local serif_family = (serif_path and lfs.attributes(serif_path)) and "'Noto Serif', serif" or "serif"
+    local sans_family = (sans_path and lfs.attributes(sans_path)) and "'Noto Sans', sans-serif" or "sans-serif"
+
+    local readme_css = string.format([=[
+%s
+@page { margin: 0; }
+body, .markdown-body, div { margin: 0 !important; padding: 0 !important; font-family: %s; }
+p, ul, ol, li, blockquote { font-family: %s !important; margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
+h1, h2, h3, h4, h5, h6 { font-family: %s !important; margin-top: 0.8em !important; margin-bottom: 0.4em !important; }
+img { max-width: 100%%; height: auto; display: block; margin-left: auto; margin-right: auto; }
+]=], font_declarations, sans_family, sans_family, serif_family)
 
     local html_box = HtmlBoxWidget:new{
         dimen = Geom:new{ w = readme_w, h = readme_h },
@@ -357,19 +389,49 @@ function StorefrontDetailsDialog:init()
     local repo_name = self.repo.name
     if owner and repo_name then
         NetworkMgr:runWhenOnline(function()
-            local ok, path = RepoContent.fetchReadmeHtml(owner, repo_name)
-            if ok and path then
-                local html_content = util.readFromFile(path)
-                if html_content and html_content ~= "" then
-                    html_box:setContent(html_content, readme_css, sc(18))
-                    updatePagination()
-                else
-                    html_box:setContent("<p style='text-align:center;color:red;'>" .. _("Unable to read README.") .. "</p>", readme_css, sc(18))
+            local ffiutil = require("ffi/util")
+            local pid, parent_read_fd = ffiutil.runInSubProcess(function(pid, child_write_fd)
+                local ok, path = RepoContent.fetchReadmeHtml(owner, repo_name)
+                local result = ""
+                if ok and path then
+                    result = path
                 end
+                ffiutil.writeToFD(child_write_fd, result, true)
+            end, true)
+
+            if pid then
+                local check_func
+                check_func = function()
+                    if self.is_closed then
+                        ffiutil.terminateSubProcess(pid)
+                        if parent_read_fd then
+                            ffiutil.readAllFromFD(parent_read_fd)
+                        end
+                        return
+                    end
+                    if ffiutil.isSubProcessDone(pid) then
+                        local path = ffiutil.readAllFromFD(parent_read_fd)
+                        if path and path ~= "" then
+                            local html_content = util.readFromFile(path)
+                            if html_content and html_content ~= "" then
+                                local cache_dir = require("datastorage"):getDataDir() .. "/cache/Storefront/readme"
+                                html_box:setContent(html_content, readme_css, sc(18), false, false, cache_dir)
+                                updatePagination()
+                            else
+                                html_box:setContent("<p style='text-align:center;color:red;'>" .. _("Unable to read README.") .. "</p>", readme_css, sc(18))
+                            end
+                        else
+                            html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("No README available.") .. "</p>", readme_css, sc(18))
+                        end
+                        UIManager:setDirty(self, "ui")
+                    else
+                        UIManager:scheduleIn(0.2, check_func)
+                    end
+                end
+                UIManager:scheduleIn(0.2, check_func)
             else
-                html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("No README available.") .. "</p>", readme_css, sc(18))
+                html_box:setContent("<p style='text-align:center;color:red;'>" .. _("Failed to start background process.") .. "</p>", readme_css, sc(18))
             end
-            UIManager:setDirty(self, "ui")
         end)
     else
         html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("No README available.") .. "</p>", readme_css, sc(18))
@@ -382,7 +444,7 @@ function StorefrontDetailsDialog:init()
         align = "left",
         back_btn,
         VerticalSpan:new{ width = sc(8) },
-        LineWidget:new{ background = Blitbuffer.COLOR_LIGHT_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } },
+        LineWidget:new{ background = Blitbuffer.COLOR_DARK_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } },
         VerticalSpan:new{ width = sc(12) },
         title_label,
         VerticalSpan:new{ width = sc(4) },
@@ -392,7 +454,7 @@ function StorefrontDetailsDialog:init()
         VerticalSpan:new{ width = sc(16) },
         main_action_btn,
         VerticalSpan:new{ width = sc(16) },
-        LineWidget:new{ background = Blitbuffer.COLOR_LIGHT_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } },
+        LineWidget:new{ background = Blitbuffer.COLOR_DARK_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } },
         VerticalSpan:new{ width = sc(12) },
         html_box,
         VerticalSpan:new{ width = sc(12) },
@@ -410,6 +472,7 @@ function StorefrontDetailsDialog:init()
 end
 
 function StorefrontDetailsDialog:onClose()
+    self.is_closed = true
     UIManager:close(self, "ui")
     return true
 end
