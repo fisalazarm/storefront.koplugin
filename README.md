@@ -8,6 +8,8 @@ Discover, install, and update community-created KOReader plugins and user patche
 
 Storefront surfaces a curated list of plugins and patches from GitHub with filtering, sorting, and install flows designed to feel native on e-ink hardware.
 
+![Storefront Plugins](https://raw.githubusercontent.com/wiki/ultimatejimmy/storefront.koplugin/img/plugin_list.png)
+
 ## Key Capabilities
 
 - **Unified browser** for both plugins and user patches with persistent filters and paging.
@@ -16,6 +18,16 @@ Storefront surfaces a curated list of plugins and patches from GitHub with filte
 - **Install/update pipeline** that handles `.koplugin` archives, verifies metadata, and copies files to `data/plugins` or `data/patches` accordingly.
 - **Update tracking** for installed plugins and numbered patch files, complete with SHA comparisons and refreshable summaries.
 - **Optional authentication** through a GitHub Personal Access Token (PAT) to increase API rate limits.
+
+## Screenshots
+
+| Plugins Browser | Patches Browser |
+| :---: | :---: |
+| ![Plugins Browser](https://raw.githubusercontent.com/wiki/ultimatejimmy/storefront.koplugin/img/plugin_list.png) | ![Patches Browser](https://raw.githubusercontent.com/wiki/ultimatejimmy/storefront.koplugin/img/patches_list.png) |
+
+| Plugin Detail & README | Check Updates |
+| :---: | :---: |
+| ![Plugin Detail](https://raw.githubusercontent.com/wiki/ultimatejimmy/storefront.koplugin/img/plugin_detail.png) | ![Updates](https://raw.githubusercontent.com/wiki/ultimatejimmy/storefront.koplugin/img/update.png) |
 
 ## Documentation
 
