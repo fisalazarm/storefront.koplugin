@@ -1,4 +1,7 @@
 # Storefront Plugin for KOReader
+![Platform](https://img.shields.io/badge/platform-KOReader-green.svg)
+![License](https://img.shields.io/badge/license-MIT-yellow.svg)
+![Status](https://img.shields.io/badge/status-active-brightgreen.svg)
 
 Discover, install, and update community-created KOReader plugins and user patches without leaving your device. 
 
