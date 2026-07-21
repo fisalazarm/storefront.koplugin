@@ -15,18 +15,28 @@ local function getLogFilePath()
     return dir .. "/storefront.log"
 end
 
+local function writeLog(level, msg)
+    -- Logging disabled per user request
+end
+
 function Logger.log(msg)
-    local path = getLogFilePath()
-    local f = io.open(path, "a")
-    if f then
-        local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-        f:write(string.format("[%s] %s\n", timestamp, tostring(msg)))
-        f:close()
-    end
-    local ok, logger = pcall(require, "logger")
-    if ok and logger and logger.info then
-        logger.info("[Storefront]", tostring(msg))
-    end
+    writeLog("INFO", msg)
+end
+
+function Logger.info(msg)
+    writeLog("INFO", msg)
+end
+
+function Logger.action(msg)
+    writeLog("ACTION", msg)
+end
+
+function Logger.warn(msg)
+    writeLog("WARN", msg)
+end
+
+function Logger.err(msg)
+    writeLog("ERROR", msg)
 end
 
 function Logger.clear()
@@ -36,5 +46,7 @@ function Logger.clear()
         f:close()
     end
 end
+
+Logger.reset = Logger.clear
 
 return Logger

@@ -15,7 +15,7 @@ end
 
 local CatalogClient = {}
 
-local DEFAULT_CATALOG_URL = "https://jpautz.github.io/storefront.koplugin/catalog.json"
+local DEFAULT_CATALOG_URL = "https://ultimatejimmy.github.io/storefront.koplugin/catalog.json"
 local USER_AGENT = "KOReader-Storefront"
 
 local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront.lua"

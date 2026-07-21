@@ -115,8 +115,20 @@ package.loaded["storefront_updates_ui"] = {
 }
 
 for _, w in ipairs(widgets) do
-    package.loaded[w] = dummy_widget
+    if w ~= "storefront_plugin_paths" and w ~= "libs/libkoreader-lfs" then
+        package.loaded[w] = dummy_widget
+    end
 end
+
+package.loaded["libs/libkoreader-lfs"] = {
+    attributes = function() return nil end,
+    dir = function() return function() return nil end end,
+}
+
+package.loaded["storefront_plugin_paths"] = {
+    getLookupPaths = function() return { "plugins" } end,
+    isPathHidden = function() return false end,
+}
 
 package.loaded["util"] = {
     makePath = function(path) return true end,
@@ -300,6 +312,55 @@ if ok_browser then
             }
         end)
         check("Details dialog loaded successfully", details_ok, true)
+    end
+
+    do
+        local dummy_records = {
+            ["simpleui.koplugin"] = {
+                dirname = "simpleui.koplugin",
+                owner = "doctorhetfield-cmd",
+                repo = "simpleui.koplugin",
+                repo_full_name = "doctorhetfield-cmd/simpleui.koplugin",
+            }
+        }
+        package.loaded["storefront_installs"] = {
+            getGeneration = function() return 1 end,
+            list = function() return dummy_records end,
+            listPatches = function() return {} end,
+        }
+        local MainStorefront = require("main")
+        MainStorefront._installed_lookup_cache = nil
+        local lookup = MainStorefront:getInstalledLookup()
+        check("Installed lookup matches directory simpleui.koplugin", lookup["simpleui.koplugin"] == true, true)
+        check("Installed lookup matches base directory simpleui", lookup["simpleui"] == true, true)
+
+        local test_fork_0_stars = { name = "test-fork", fork = true, stars = 0 }
+        local test_repo_stars = { name = "test-repo", fork = false, stars = 10 }
+        
+        local filter_ok, result = pcall(function()
+            return MainStorefront:matchesGeneralFilters(test_fork_0_stars, {})
+        end)
+        check("matchesGeneralFilters executes without nil upvalue error", filter_ok, true)
+        check("0-star fork is filtered out by default", result, false)
+        check("Normal repo passes general filters", MainStorefront:matchesGeneralFilters(test_repo_stars, {}), true)
+
+        -- Test autoMatchInstalled preference (highest stars win, author match wins top priority)
+        package.loaded["storefront_plugin_paths"] = {
+            getLookupPaths = function() return { "plugins" } end,
+            isPathHidden = function() return false end,
+        }
+        local dummy_fork = { name = "simpleui.koplugin", owner = "somefork", full_name = "somefork/simpleui.koplugin", fork = true, stars = 0 }
+        local dummy_main = { name = "simpleui.koplugin", owner = "doctorhetfield-cmd", full_name = "doctorhetfield-cmd/simpleui.koplugin", fork = false, stars = 15 }
+        local dummy_popular_fork = { name = "popularplugin.koplugin", owner = "popfork", full_name = "popfork/popularplugin.koplugin", fork = true, stars = 100 }
+        local dummy_low_main = { name = "popularplugin.koplugin", owner = "originaldev", full_name = "originaldev/popularplugin.koplugin", fork = false, stars = 5 }
+        local orig_list = package.loaded["storefront_cache"].listRepos
+        package.loaded["storefront_cache"].listRepos = function()
+            return { dummy_fork, dummy_main, dummy_popular_fork, dummy_low_main }
+        end
+        MainStorefront:autoMatchInstalled()
+        package.loaded["storefront_cache"].listRepos = orig_list
+        local rec = MainStorefront:getInstalledLookup()
+        check("Installed plugin simpleui resolved successfully", rec ~= nil, true)
     end
 end
 

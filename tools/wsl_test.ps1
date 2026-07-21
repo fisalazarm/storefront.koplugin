@@ -64,7 +64,14 @@ function Run-Workflow {
     $TestCmd = "cd {0}/usr/lib/koreader && env SQUASHFS_ROOT={0} LUA_PATH='{1}/?.lua;./?.lua;./?/init.lua;frontend/?.lua;frontend/?/init.lua;libs/?.lua;common/?.lua;common/?/init.lua;;' ./luajit {1}/storefront_plugin_paths_test.lua" -f $SquashPath, $WSLDest
     wsl bash -c `"$TestCmd`"
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Tests FAILED." -ForegroundColor Red
+        Write-Host "Plugin Path Tests FAILED." -ForegroundColor Red
+        return $false
+    }
+    Write-Host "Running README Markdown-to-HTML unit tests..."
+    $ReadmeTestCmd = "cd {0}/usr/lib/koreader && env SQUASHFS_ROOT={0} LUA_PATH='{1}/?.lua;./?.lua;./?/init.lua;frontend/?.lua;frontend/?/init.lua;libs/?.lua;common/?.lua;common/?/init.lua;;' ./luajit {1}/storefront_readme_test.lua" -f $SquashPath, $WSLDest
+    wsl bash -c `"$ReadmeTestCmd`"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "README Tests FAILED." -ForegroundColor Red
         return $false
     }
     Write-Host "Running UI loading crash tests..."

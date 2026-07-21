@@ -27,6 +27,22 @@ local AuthSettings = LuaSettings:open(AUTH_SETTINGS_PATH)
 local TOKEN_KEY = "github_token"
 local CATALOG_MODE_KEY = "catalog_mode"
 
+local function joinQueryParts(parts)
+    if not parts or #parts == 0 then
+        return ""
+    end
+    return table.concat(parts, " ")
+end
+
+local function newTableSink(target)
+    return function(chunk, err)
+        if chunk then
+            target[#target + 1] = chunk
+        end
+        return 1, err
+    end
+end
+
 -- Returns the configured PAT, preferring the one saved via the Settings UI
 -- over the legacy storefront_configuration.lua file (kept for users who
 -- already set that up).
@@ -312,12 +328,104 @@ function GitHubClient.fetchCompareCommits(owner, repo, base, head)
     return parsed, nil
 end
 
+local function markdownToHtml(md)
+    if not md or md == "" then
+        return "<div class=\"markdown-body\"><p>No README content.</p></div>"
+    end
+
+    local lines = {}
+    local in_code_block = false
+    local in_list = false
+
+    for line in (md .. "\n"):gmatch("(.-)\r?\n") do
+        if line:match("^%s*```") then
+            if in_code_block then
+                table.insert(lines, "</code></pre>")
+                in_code_block = false
+            else
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<pre><code>")
+                in_code_block = true
+            end
+        elseif in_code_block then
+            local escaped = line:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+            table.insert(lines, escaped)
+        else
+            local processed = line:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+
+            -- Inline formatting
+            processed = processed:gsub("%[([^%]]+)%]%(([^%)]+)%)", '<a href="%2">%1</a>')
+            processed = processed:gsub("%*%*([^*]+)%*%*", "<b>%1</b>")
+            processed = processed:gsub("__([^_]+)__", "<b>%1</b>")
+            processed = processed:gsub("%*([^*]+)%*", "<i>%1</i>")
+            processed = processed:gsub("_([^_]+)_", "<i>%1</i>")
+            processed = processed:gsub("`([^`]+)`", "<code>%1</code>")
+
+            -- Headings
+            local h6 = processed:match("^######%s+(.+)")
+            local h5 = processed:match("^#####%s+(.+)")
+            local h4 = processed:match("^####%s+(.+)")
+            local h3 = processed:match("^###%s+(.+)")
+            local h2 = processed:match("^##%s+(.+)")
+            local h1 = processed:match("^#%s+(.+)")
+
+            if h1 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h1>" .. h1 .. "</h1>")
+            elseif h2 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h2>" .. h2 .. "</h2>")
+            elseif h3 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h3>" .. h3 .. "</h3>")
+            elseif h4 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h4>" .. h4 .. "</h4>")
+            elseif h5 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h5>" .. h5 .. "</h5>")
+            elseif h6 then
+                if in_list then table.insert(lines, "</ul>"); in_list = false end
+                table.insert(lines, "<h6>" .. h6 .. "</h6>")
+            else
+                local item = processed:match("^%s*[%-%*]%s+(.+)")
+                if item then
+                    if not in_list then
+                        table.insert(lines, "<ul>")
+                        in_list = true
+                    end
+                    table.insert(lines, "<li>" .. item .. "</li>")
+                else
+                    if in_list then
+                        table.insert(lines, "</ul>")
+                        in_list = false
+                    end
+                    if processed:match("^%s*$") then
+                        table.insert(lines, "<br/>")
+                    else
+                        table.insert(lines, "<p>" .. processed .. "</p>")
+                    end
+                end
+            end
+        end
+    end
+
+    if in_code_block then table.insert(lines, "</code></pre>") end
+    if in_list then table.insert(lines, "</ul>") end
+
+    return '<div class="markdown-body">\n' .. table.concat(lines, "\n") .. '\n</div>'
+end
+
+GitHubClient.markdownToHtml = markdownToHtml
+
 -- Fetch the HTML representation of README.
 -- Returns raw HTML string, or nil + error.
 function GitHubClient.fetchReadmeHtml(owner, repo)
     if not owner or not repo then
         return nil, "missing parameters"
     end
+
+    -- First try direct API if enabled or available
     local path = string.format("/repos/%s/%s/readme", owner, repo)
     local response_body = {}
     local target = BASE_URL .. path
@@ -338,10 +446,26 @@ function GitHubClient.fetchReadmeHtml(owner, repo)
         sink = newTableSink(response_body),
     }
     local body = table.concat(response_body)
-    if tonumber(code) ~= 200 then
-        return nil, string.format("HTTP %s", tostring(code))
+    if tonumber(code) == 200 and body ~= "" then
+        return body, nil
     end
-    return body, nil
+
+    -- Fallback for Storefront mode / API rate limits: fetch raw README from GitHub CDN
+    local raw_url = string.format("https://raw.githubusercontent.com/%s/%s/HEAD/README.md", owner, repo)
+    local raw_response = {}
+    local _, raw_code = http.request{
+        url = raw_url,
+        headers = {
+            ["User-Agent"] = USER_AGENT,
+        },
+        sink = newTableSink(raw_response),
+    }
+    local raw_body = table.concat(raw_response)
+    if tonumber(raw_code) == 200 and raw_body ~= "" then
+        return markdownToHtml(raw_body), nil
+    end
+
+    return nil, string.format("HTTP %s", tostring(code))
 end
 
 return GitHubClient

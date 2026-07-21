@@ -13,11 +13,22 @@ function StorefrontUpdatesUi:init(StorefrontClass)
         self:ensureUpdatesState()
         self:ensurePatchUpdatesState()
 
-        -- Merged list of updates
-        local plugin_summary = self:collectUpdateSummary()
-        local patch_summary = self:collectPatchUpdateSummary()
+        local InstallStore = require("storefront_installs")
+        local gen = InstallStore.getGeneration and InstallStore.getGeneration() or 0
+        local remote_key = self.updates_state and self.updates_state.remote_info
+        local patch_remote_key = self.patch_updates_state and self.patch_updates_state.remote_info
+        local filter_outdated = self.updates_state and self.updates_state.filter_only_outdated
+        local cache_key = string.format("%s|%s|%s|%s", tostring(gen), tostring(remote_key), tostring(patch_remote_key), tostring(filter_outdated))
 
-        local merged = {}
+        local merged
+        if self._merged_updates_cache and self._merged_updates_cache.key == cache_key then
+            merged = self._merged_updates_cache.merged
+        else
+            -- Merged list of updates
+            local plugin_summary = self:collectUpdateSummary()
+            local patch_summary = self:collectPatchUpdateSummary()
+
+            merged = {}
 
         -- Gather plugins
         for idx, item in ipairs(plugin_summary.data or {}) do
@@ -31,6 +42,11 @@ function StorefrontUpdatesUi:init(StorefrontClass)
                 local local_ver = (plugin.version and tostring(plugin.version):gsub("^[vV]", "")) or _("unknown")
                 local remote_ver_raw = remote and (remote.release_tag_name or remote.remote_version)
                 local remote_ver = remote_ver_raw and tostring(remote_ver_raw):gsub("^[vV]", "") or nil
+
+                if not remote_ver or remote_ver == "" or remote_ver == "new" or remote_ver == local_ver then
+                    has_update = false
+                end
+
                 local remote_display
                 if has_update then
                     remote_display = remote_ver or _("new")
@@ -169,6 +185,12 @@ function StorefrontUpdatesUi:init(StorefrontClass)
             local bname = b.name or ""
             return aname:lower() < bname:lower()
         end)
+
+        self._merged_updates_cache = {
+            key = cache_key,
+            merged = merged,
+        }
+        end
 
         local display_total = #merged
         local page_size = self:calculateDynamicPageSize("Updates")

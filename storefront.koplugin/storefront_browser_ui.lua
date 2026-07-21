@@ -275,6 +275,7 @@ function StorefrontBrowserDialog:init()
 
     self._header_filter_btn = filter_btn
     self._header_settings_btn = settings_btn
+    self._close_btn = close_btn
 
     self._focusable_items = {}
     self._focusable_row_offsets = {}

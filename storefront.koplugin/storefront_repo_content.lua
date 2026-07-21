@@ -187,59 +187,37 @@ function RepoContent.fetchReadmeHtml(owner, repo)
     if not owner or not repo then
         return false, "missing owner/repo"
     end
+    local dir = getCacheDir()
+    local safe_owner = owner:gsub("[^%w_-]", "_")
+    local safe_repo = repo:gsub("[^%w_-]", "_")
+    local path = string.format("%s/%s_%s_README.html", dir, safe_owner, safe_repo)
+
+    -- 1. Check disk cache first for instant opening
+    if lfs.attributes(path, "mode") == "file" then
+        return true, path
+    end
+
+    -- 2. Fetch HTML content
     local body, err = GitHubClient.fetchReadmeHtml(owner, repo)
     if not body then
         return false, err or "fetch error"
     end
-    local dir = getCacheDir()
-    local safe_owner = owner:gsub("[^%w_-]", "_")
-    local safe_repo = repo:gsub("[^%w_-]", "_")
     
     -- Strip explicit width and height attributes so images expand to full width
     body = body:gsub("(<img[^>]+)%s+width=[\"'][^\"']*[\"']", "%1")
     body = body:gsub("(<img[^>]+)%s+height=[\"'][^\"']*[\"']", "%1")
     body = body:gsub("(<img[^>]+style=[\"'][^\"']*)width:%s*[^;\"]+;?", "%1")
 
-    local image_idx = 1
+    -- Clean up inline images without blocking synchronous downloads
     body = body:gsub('(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)', function(prefix, raw_url, suffix)
-        -- Decode HTML entity query parameters (&amp; -> &) for signed S3 / GitHub user asset URLs
         local url = raw_url:gsub("&amp;", "&")
-
-        -- Cheap early-out for the common case (e.g. shields.io badges linked
-        -- directly); camo-proxied SVGs slip past this and are caught later
-        -- via Content-Type once downloaded, since their URLs are opaque hashes.
-        local is_svg = url:lower():match("%.svg") ~= nil
-        if is_svg then
+        if url:lower():match("%.svg") ~= nil then
             return ""
         end
-
-        -- README HTML leaves relative paths (e.g. "./data/screenshots/x.png")
-        -- unresolved -- rewrite them against the repo's default branch.
         url = resolveImageUrl(url, owner, repo)
-
-        -- Extract the extension from the end of the path (ignoring the query
-        -- string), not the first "dot-word" in the URL -- otherwise this
-        -- matches a domain fragment (e.g. "githubusercontent" or "com" from
-        -- github.com/user-attachments/... pasted-screenshot URLs) instead of
-        -- the real file extension. downloadImage corrects this further using
-        -- the response's Content-Type once the actual bytes are known.
-        local path_only = url:match("^([^%?]+)") or url
-        local ext = path_only:match("%.([%w]+)$")
-        if not ext or ext == "" or #ext > 4 then ext = "png" end
-        ext = ext:lower()
-
-        local img_filename = string.format("%s_%s_img%d.%s", safe_owner, safe_repo, image_idx, ext)
-        local img_path = dir .. "/" .. img_filename
-        local ok, final_path = downloadImage(url, img_path)
-        if ok then
-            image_idx = image_idx + 1
-            local final_filename = (final_path or img_path):match("[^/]+$") or img_filename
-            return prefix .. final_filename .. suffix
-        end
-        return ""
+        return prefix .. url .. suffix
     end)
 
-    local path = string.format("%s/%s_%s_README.html", dir, safe_owner, safe_repo)
     local ok, write_err = util.writeToFile(body, path)
     if not ok then
         return false, write_err or "write error"

@@ -54,15 +54,11 @@ local R = {
 }
 R.Input = R.Device.input
 
-setfenv(1, setmetatable({}, {
-    __index = function(t, k)
-        return R[k] or _G[k]
-    end,
-    __newindex = _G,
-}))
-
-StorefrontLogger.log("==========================================")
-StorefrontLogger.log("Storefront module loaded (main.lua)")
+local env = setmetatable({}, { __index = _G })
+for k, v in pairs(R) do
+    env[k] = v
+end
+setfenv(1, env)
 
 local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront.lua"
 local StorefrontSettings = LuaSettings:open(SETTINGS_PATH)
@@ -187,7 +183,7 @@ local function isReleaseIgnored(owner, repo_name, version)
 end
 
 
-local extractRepoOwner, ensureCacheDir, ensurePatchesDir, downloadToFile, buildPatchDownloadUrl, derivePluginRepoPath, sanitizeMetaPath, fetchGitHubRaw, formatTimestamp, parseGitHubTimestamp, buildRepoDescriptorFromRecord, buildBranchCandidates, getRepoDefaultBranch, extractMetaField, getPatchRecordsMap, extractPluginToUserDir, extractReleaseNameFallback, detectPluginFromArchiveWithFallback, renderReleaseNotesText, softWrapLongTokens
+local extractRepoOwner, ensureCacheDir, ensurePatchesDir, downloadToFile, buildPatchDownloadUrl, derivePluginRepoPath, sanitizeMetaPath, fetchGitHubRaw, formatTimestamp, parseGitHubTimestamp, buildRepoDescriptorFromRecord, buildBranchCandidates, getRepoDefaultBranch, extractMetaField, getPatchRecordsMap, extractPluginToUserDir, extractReleaseNameFallback, detectPluginFromArchiveWithFallback, renderReleaseNotesText, softWrapLongTokens, repoIsFork, repoStarsValue
 
 local function buildPatchRepoDescriptor(record)
     if not record or not record.owner or not record.repo then
@@ -1214,14 +1210,52 @@ function Storefront:resetPageAndScroll(state, menu)
     end
 end
 
+local function extractAuthorFromPlugin(plugin)
+    if not plugin then return nil end
+    local meta = plugin.meta
+    if meta then
+        if meta.owner and type(meta.owner) == "string" and meta.owner ~= "" then return meta.owner end
+        if meta.author and type(meta.author) == "string" and meta.author ~= "" then return meta.author end
+        if meta.developer and type(meta.developer) == "string" and meta.developer ~= "" then return meta.developer end
+        if meta.by and type(meta.by) == "string" and meta.by ~= "" then return meta.by end
+        
+        local url = meta.url or meta.homepage or meta.repository or meta.repo or meta.fullname
+        if url and type(url) == "string" then
+            local owner = url:match("github%.com/([^/]+)")
+            if owner then return owner end
+        end
+    end
+    
+    if plugin.path then
+        local git_cfg_path = plugin.path .. "/.git/config"
+        local f = io.open(git_cfg_path, "r")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            if content then
+                local owner = content:match("github%.com[:/]([^/]+)")
+                if owner then return owner end
+            end
+        end
+    end
+    
+    return nil
+end
+
 function Storefront:autoMatchInstalled()
+    local current_gen = InstallStore.getGeneration and InstallStore.getGeneration() or 0
+    if self._auto_matched_gen == current_gen then
+        return
+    end
+    self._auto_matched_gen = current_gen
+
     -- 1. Plugins
     local records = getInstallRecordsMap()
     local installed_plugins = listInstalledPlugins()
     local unmatched_plugins = {}
     for _, plugin in ipairs(installed_plugins) do
         local record = records[plugin.dirname]
-        if not (record and record.owner and record.repo) then
+        if not (record and record.owner and record.repo) or record.is_auto_matched then
             table.insert(unmatched_plugins, plugin)
         end
     end
@@ -1229,23 +1263,62 @@ function Storefront:autoMatchInstalled()
     if #unmatched_plugins > 0 then
         local cached_plugins = Cache.listRepos("plugin")
         local name_map = {}
+
+        local function isBetterMatch(existing, candidate)
+            if not existing then return true end
+            local ex_stars = repoStarsValue(existing)
+            local ca_stars = repoStarsValue(candidate)
+            if ca_stars ~= ex_stars then
+                return ca_stars > ex_stars -- higher star count always wins
+            end
+            local ex_fork = existing.fork or (existing.data and existing.data.fork) or false
+            local ca_fork = candidate.fork or (candidate.data and candidate.data.fork) or false
+            if ex_fork ~= ca_fork then
+                return not ca_fork -- tiebreaker: prefer non-fork if stars are equal
+            end
+            return false
+        end
+
         for _, repo in ipairs(cached_plugins) do
             if repo.name then
                 local low_name = repo.name:lower()
-                if not name_map[low_name] then
+                if isBetterMatch(name_map[low_name], repo) then
                     name_map[low_name] = repo
                 end
                 local clean = repo.name:gsub("%.koplugin$", ""):lower()
-                if not name_map[clean] then
+                if isBetterMatch(name_map[clean], repo) then
                     name_map[clean] = repo
                 end
             end
         end
 
         for _, plugin in ipairs(unmatched_plugins) do
+            local author = extractAuthorFromPlugin(plugin)
             local clean_dirname = plugin.dirname:gsub("%.koplugin$", ""):lower()
-            local repo = name_map[clean_dirname]
+            local repo
+            if author then
+                local norm_author = author:lower()
+                for _, candidate in ipairs(cached_plugins) do
+                    if candidate.name then
+                        local candidate_clean = candidate.name:gsub("%.koplugin$", ""):lower()
+                        if candidate_clean == clean_dirname or candidate.name:lower() == plugin.dirname:lower() then
+                            local ca_owner = (candidate.owner or (candidate.data and candidate.data.owner and candidate.data.owner.login) or ""):lower()
+                            if ca_owner == norm_author then
+                                repo = candidate
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+
+            if not repo then
+                repo = name_map[clean_dirname] or name_map[plugin.dirname:lower()]
+            end
+
             if repo then
+                local existing_rec = records[plugin.dirname]
+                local matched_at = (existing_rec and existing_rec.matched_at) or os.time()
                 local record = {
                     owner = repo.owner,
                     repo = repo.name,
@@ -1253,7 +1326,7 @@ function Storefront:autoMatchInstalled()
                     repo_description = repo.description,
                     repo_id = repo.repo_id,
                     branch = repo.data and repo.data.default_branch or "main",
-                    matched_at = os.time(),
+                    matched_at = matched_at,
                     is_auto_matched = true,
                 }
                 InstallStore.upsert(plugin.dirname, record)
@@ -1270,6 +1343,8 @@ function Storefront:autoMatchInstalled()
         if not (record and record.owner and record.repo and record.path) then
             local repo, file_map = Cache.findPatchRepoAndFile(patch.filename)
             if repo and file_map then
+                local existing_patch_rec = patch_records[patch.filename]
+                local matched_at = (existing_patch_rec and existing_patch_rec.matched_at) or os.time()
                 local record = {
                     filename = patch.filename,
                     owner = repo.owner,
@@ -1281,7 +1356,7 @@ function Storefront:autoMatchInstalled()
                     path = file_map.path,
                     download_url = file_map.download_url,
                     sha = file_map.sha,
-                    matched_at = os.time(),
+                    matched_at = matched_at,
                     is_auto_matched = true,
                 }
                 InstallStore.upsertPatch(patch.filename, record)
@@ -1432,8 +1507,8 @@ function Storefront:collectUpdateSummary()
 
                 if remote_version and local_version then
                     has_update = isVersionNewer(remote_version, local_version)
-                elseif remote_repo_ts > 0 and local_latest_ts > 0 then
-                    has_update = remote_repo_ts > local_latest_ts
+                else
+                    has_update = false
                 end
             end
         end
@@ -2421,60 +2496,74 @@ function Storefront:checkAllUpdates()
                 if not owner or not repo_name then
                     last_err = "Missing repository info."
                 else
-                    local latest_release, release_err = GitHub.fetchLatestRelease(owner, repo_name)
-                    
-                    if latest_release and latest_release.tag_name then
-                        if not latest_release.prerelease and not latest_release.draft then
-                            local tag_lower = latest_release.tag_name:lower()
-                            local is_prerelease_tag = tag_lower:find("alpha", 1, true) or 
-                                                      tag_lower:find("beta", 1, true) or 
-                                                      tag_lower:find("rc", 1, true) or 
-                                                      tag_lower:find("dev", 1, true) or 
-                                                      tag_lower:find("preview", 1, true) or 
-                                                      tag_lower:find("pre", 1, true) or 
-                                                      tag_lower:find("test", 1, true)
-                            
-                            if not is_prerelease_tag then
-                                release_tag_name = latest_release.tag_name
-                                release_published_at = parseGitHubTimestampWorker(latest_release.published_at)
+                    local cached_repo = Cache.getRepoByName(owner, repo_name) or (record.repo_id and Cache.getRepo(record.repo_id))
+                    if cached_repo and not GitHub.isDirectApiEnabled() then
+                        local rel = cached_repo.latest_release or (cached_repo.data and cached_repo.data.latest_release)
+                        if rel and rel.tag_name then
+                            release_tag_name = rel.tag_name
+                            release_published_at = parseGitHubTimestampWorker(rel.published_at)
+                        end
+                        if not release_tag_name and cached_repo.version then
+                            release_tag_name = cached_repo.version
+                        end
+                        local ts = cached_repo.data and (cached_repo.data.pushed_at or cached_repo.data.created_at)
+                        remote_repo_ts = parseGitHubTimestampWorker(ts)
+                    else
+                        local latest_release, release_err = GitHub.fetchLatestRelease(owner, repo_name)
+                        
+                        if latest_release and latest_release.tag_name then
+                            if not latest_release.prerelease and not latest_release.draft then
+                                local tag_lower = latest_release.tag_name:lower()
+                                local is_prerelease_tag = tag_lower:find("alpha", 1, true) or 
+                                                          tag_lower:find("beta", 1, true) or 
+                                                          tag_lower:find("rc", 1, true) or 
+                                                          tag_lower:find("dev", 1, true) or 
+                                                          tag_lower:find("preview", 1, true) or 
+                                                          tag_lower:find("pre", 1, true) or 
+                                                          tag_lower:find("test", 1, true)
+                                
+                                if not is_prerelease_tag then
+                                    release_tag_name = latest_release.tag_name
+                                    release_published_at = parseGitHubTimestampWorker(latest_release.published_at)
+                                end
                             end
                         end
-                    end
-                    
-                    if not release_tag_name then
-                        local releases, fetch_err = GitHub.fetchReleases(owner, repo_name, {
-                            per_page = 30,
-                            max_pages = 1,
-                        })
                         
-                        if releases and #releases > 0 then
-                            for _, release in ipairs(releases) do
-                                if not release.draft and not release.prerelease then
-                                    local tag_lower = release.tag_name:lower()
-                                    local is_prerelease_tag = tag_lower:find("alpha", 1, true) or 
-                                                              tag_lower:find("beta", 1, true) or 
-                                                              tag_lower:find("rc", 1, true) or 
-                                                              tag_lower:find("dev", 1, true) or 
-                                                              tag_lower:find("preview", 1, true) or 
-                                                              tag_lower:find("pre", 1, true) or 
-                                                              tag_lower:find("test", 1, true)
-                                    
-                                    if not is_prerelease_tag then
-                                        release_tag_name = release.tag_name
-                                        release_published_at = parseGitHubTimestampWorker(release.published_at)
-                                        break
+                        if not release_tag_name then
+                            local releases, fetch_err = GitHub.fetchReleases(owner, repo_name, {
+                                per_page = 30,
+                                max_pages = 1,
+                            })
+                            
+                            if releases and #releases > 0 then
+                                for _, release in ipairs(releases) do
+                                    if not release.draft and not release.prerelease then
+                                        local tag_lower = release.tag_name:lower()
+                                        local is_prerelease_tag = tag_lower:find("alpha", 1, true) or 
+                                                                  tag_lower:find("beta", 1, true) or 
+                                                                  tag_lower:find("rc", 1, true) or 
+                                                                  tag_lower:find("dev", 1, true) or 
+                                                                  tag_lower:find("preview", 1, true) or 
+                                                                  tag_lower:find("pre", 1, true) or 
+                                                                  tag_lower:find("test", 1, true)
+                                        
+                                        if not is_prerelease_tag then
+                                            release_tag_name = release.tag_name
+                                            release_published_at = parseGitHubTimestampWorker(release.published_at)
+                                            break
+                                        end
                                     end
                                 end
                             end
                         end
-                    end
-                    
-                    local metadata, metadata_err = GitHub.fetchRepoMetadata(owner, repo_name)
-                    if metadata and type(metadata) == "table" then
-                        local ts = metadata.pushed_at or metadata.created_at
-                        remote_repo_ts = parseGitHubTimestampWorker(ts)
-                    else
-                        last_err = metadata_err or last_err
+                        
+                        local metadata, metadata_err = GitHub.fetchRepoMetadata(owner, repo_name)
+                        if metadata and type(metadata) == "table" then
+                            local ts = metadata.pushed_at or metadata.created_at
+                            remote_repo_ts = parseGitHubTimestampWorker(ts)
+                        else
+                            last_err = metadata_err or last_err
+                        end
                     end
 
                     local meta_path = record.meta_path
@@ -5688,7 +5777,7 @@ parseGitHubTimestamp = function(value)
     }) or 0
 end
 
-local function repoStarsValue(repo)
+repoStarsValue = function(repo)
     if type(repo) ~= "table" then return 0 end
     local s = tonumber(repo.stars)
     if s and s > 0 then return s end
@@ -5697,6 +5786,13 @@ local function repoStarsValue(repo)
         if s and s > 0 then return s end
     end
     return s or 0
+end
+
+repoIsFork = function(repo)
+    if type(repo) ~= "table" then return false end
+    if repo.fork ~= nil then return repo.fork == true end
+    if repo.data and repo.data.fork ~= nil then return repo.data.fork == true end
+    return false
 end
 
 local function repoUpdatedValue(repo)
@@ -6111,6 +6207,17 @@ end
 
 function Storefront:matchesGeneralFilters(repo, filters)
     filters = filters or self.browser_state or {}
+
+    local include_zero = StorefrontSettings:readSetting(INCLUDE_ZERO_STAR_FORKS_KEY) == true
+        or (self.browser_state and self.browser_state.include_zero_star_forks == true)
+    if not include_zero then
+        local is_fork = repoIsFork(repo) or repo.fork == true or (repo.data and repo.data.fork == true)
+        local stars = repoStarsValue(repo)
+        if is_fork and stars == 0 then
+            return false
+        end
+    end
+
     local owner_filter = normalizedLower(filters.owner)
     if owner_filter ~= "" then
         local owner_value = repo.owner or (repo.data and repo.data.owner and repo.data.owner.login)
@@ -6145,9 +6252,23 @@ end
 function Storefront:getFilteredDescriptors(kind)
     self:ensureBrowserState()
     local descriptors = self:getRepoDescriptors(kind)
-    local filtered = {}
+    
     local search = normalizedLower(self.browser_state.search_text)
     local search_active = search ~= ""
+    local rf = self.readme_filter
+    local rf_key = rf and (rf.kind .. "_" .. (rf.matches_count or 0)) or ""
+    local fetched = Cache.getLastFetched and Cache.getLastFetched(kind) or 0
+    local gen = InstallStore.getGeneration and InstallStore.getGeneration() or 0
+    local cache_key = string.format("%s|%s|%s|%s|%s|%s|%s|%s|%s",
+        tostring(kind), tostring(search), tostring(self.browser_state.search_in_readme),
+        tostring(self.browser_state.min_stars), tostring(self.browser_state.owner),
+        tostring(self.browser_state.include_zero_star_forks), rf_key, tostring(fetched), tostring(gen))
+        
+    if self._filtered_descriptors_cache and self._filtered_descriptors_cache.key == cache_key then
+        return self._filtered_descriptors_cache.filtered, self._filtered_descriptors_cache.total
+    end
+
+    local filtered = {}
     for _, repo in ipairs(descriptors) do
         if kind == "patch" then
             if self:matchesGeneralFilters(repo, self.browser_state) then
@@ -6209,6 +6330,11 @@ function Storefront:getFilteredDescriptors(kind)
         end
     end
     self:sortRepoList(filtered)
+    self._filtered_descriptors_cache = {
+        key = cache_key,
+        filtered = filtered,
+        total = #descriptors
+    }
     return filtered, #descriptors
 end
 
@@ -6421,8 +6547,13 @@ function Storefront:getPatchEntriesForRepo(repo)
 end
 
 function Storefront:collectPatchEntries(repos)
-    local aggregated = {}
     local search = normalizedLower(self.browser_state.search_text)
+    local cache_key = tostring(#repos) .. "_" .. search .. "_" .. (self.browser_state.search_in_readme and "1" or "0")
+    if self._cached_patch_entries and self._cached_patch_entries_key == cache_key then
+        return self._cached_patch_entries
+    end
+
+    local aggregated = {}
     local search_active = search ~= ""
     local rf = self.readme_filter
     for _, repo in ipairs(repos) do
@@ -6460,7 +6591,10 @@ function Storefront:collectPatchEntries(repos)
             end
         end
     end
-    return self:sortPatchEntries(aggregated)
+    local result = self:sortPatchEntries(aggregated)
+    self._cached_patch_entries = result
+    self._cached_patch_entries_key = cache_key
+    return result
 end
 
 local function getRepoVersionOrDate(repo, installed_lookup)
@@ -6487,9 +6621,11 @@ end
 function Storefront:makeRepoMenuItem(repo, installed_lookup)
     local is_installed = false
     if installed_lookup then
-        if repo.full_name and installed_lookup[repo.full_name] then
+        if repo.full_name and (installed_lookup[repo.full_name] or installed_lookup[repo.full_name:lower()]) then
             is_installed = true
         elseif repo.id and installed_lookup["id:" .. tostring(repo.id)] then
+            is_installed = true
+        elseif repo.name and (installed_lookup[repo.name] or installed_lookup[repo.name:lower()]) then
             is_installed = true
         end
     end
@@ -6736,11 +6872,6 @@ function Storefront:computePageFlipFocus(dialog, forward)
 end
 
 function Storefront:reopenBrowser(kind)
-    -- Callers that change what the list shows (sort, filter, clear filters, page
-    -- size, page flips) set browser_state.scroll_offset = nil to request a fresh
-    -- top-of-page view. Honour it: reset the live scroller and suppress the
-    -- dismiss-time save, otherwise onCloseWidget's on_dismiss writes the old live
-    -- offset back over that nil and the rebuilt list reopens scrolled down.
     if self.browser_state and self.browser_state.scroll_offset == nil then
         self:resetBrowserScrollState()
     end
@@ -6835,17 +6966,12 @@ function Storefront:showBrowser(kind)
     local Cache = require("storefront_cache")
     local check_kind = (current_tab == "Patches") and "patch" or "plugin"
     local last_fetched = Cache.getLastFetched(check_kind)
+    local now = os.time()
     self.auto_refreshed = self.auto_refreshed or {}
     
     if not self.auto_refreshed[check_kind] then
         self.auto_refreshed[check_kind] = true
-        if not GitHub.isDirectApiEnabled() then
-            -- In static catalog mode, quietly update catalog in background if online
-            NetworkMgr:runWhenOnline(function()
-                local CatalogClient = require("storefront_net_catalog")
-                CatalogClient.fetchAndUpdateCache()
-            end)
-        elseif not last_fetched or last_fetched == 0 then
+        if not last_fetched or last_fetched == 0 then
             UIManager:nextTick(function()
                 UIManager:show(ConfirmBox:new{
                     text = _("The Storefront cache is empty. Would you like to download the plugin list from GitHub now?"),
@@ -7016,11 +7142,6 @@ function Storefront:showBrowser(kind)
     }
     if dialog._used_trapper_progress then
         Trapper:reset()
-    end
-    if self.browser_menu then
-        local old_dialog = self.browser_menu
-        self.browser_menu = nil
-        UIManager:close(old_dialog)
     end
     self.browser_menu = dialog
     UIManager:show(dialog)
@@ -7439,9 +7560,28 @@ function Storefront:getInstalledLookup()
         end
         if full_name then
             lookup[full_name] = true
+            lookup[full_name:lower()] = true
         end
         if rec.repo_id then
             lookup["id:" .. tostring(rec.repo_id)] = true
+        end
+        if rec.dirname then
+            lookup[rec.dirname] = true
+            lookup[rec.dirname:lower()] = true
+            local base_dir = rec.dirname:gsub("%.koplugin$", "")
+            lookup[base_dir] = true
+            lookup[base_dir:lower()] = true
+        end
+        if rec.repo then
+            lookup[rec.repo] = true
+            lookup[rec.repo:lower()] = true
+            local base_repo = rec.repo:gsub("%.koplugin$", "")
+            lookup[base_repo] = true
+            lookup[base_repo:lower()] = true
+        end
+        if rec.name then
+            lookup[rec.name] = true
+            lookup[rec.name:lower()] = true
         end
     end
     self._installed_lookup_cache = { generation = generation, lookup = lookup }
@@ -7472,6 +7612,9 @@ function Storefront:getRepoDescriptors(kind)
             language = repo.language,
             description = repo.description,
             homepage = repo.homepage,
+            default_branch = repo.default_branch,
+            latest_release = repo.latest_release,
+            patch_files = repo.patch_files,
             data = repo.data,
         }
         table.insert(descriptors, descriptor)
@@ -7935,7 +8078,17 @@ function Storefront:_installPluginFromRepoInternal(repo)
         return
     end
 
-    local url = string.format("https://api.github.com/repos/%s/%s/zipball", owner, repo.name)
+    local url
+    local branch = repo.default_branch or (repo.data and repo.data.default_branch) or "main"
+    if GitHub.isDirectApiEnabled() then
+        url = string.format("https://api.github.com/repos/%s/%s/zipball", owner, repo.name)
+    else
+        if repo.latest_release and type(repo.latest_release) == "table" and repo.latest_release.download_url and repo.latest_release.download_url ~= "" then
+            url = repo.latest_release.download_url
+        else
+            url = string.format("https://github.com/%s/%s/archive/refs/heads/%s.zip", owner, repo.name, branch)
+        end
+    end
 
     local cache_dir = ensureCacheDir()
     local downloads_dir = cache_dir .. "/downloads"
@@ -8029,6 +8182,7 @@ function Storefront:_installPluginFromRepoInternal(repo)
         end
 
         UIManager:close(install_progress)
+        StorefrontLogger.action(msg)
         showRestartConfirmation(msg)
 
         self:handlePostInstall(info, repo)
@@ -8523,7 +8677,10 @@ function Storefront:refreshCache(kind)
 end
 
 function Storefront:init()
-    StorefrontLogger.log("Storefront:init() called")
+    StorefrontLogger.reset()
+    local mode_str = GitHub.isDirectApiEnabled() and "Direct API" or "Storefront Catalog"
+    local plugin_count = Cache.countRepos and Cache.countRepos("plugin") or #Cache.listRepos("plugin")
+    StorefrontLogger.info(string.format("Storefront initialized (Mode: %s, Cached plugins: %d)", mode_str, plugin_count or 0))
     Storefront.instance = self
     self.cache_dir = ensureCacheDir()
     self:onDispatcherRegisterActions()
@@ -8564,7 +8721,6 @@ function Storefront:addToMainMenu(menu_items)
         sorting_hint = "tools",
         text = _("Storefront"),
         callback = function()
-            StorefrontLogger.log("Main menu item Storefront clicked")
             self:showBrowser()
         end,
     }

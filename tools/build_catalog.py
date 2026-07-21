@@ -78,8 +78,8 @@ def search_repositories(base_query):
     all_items = []
     # Search non-forks (up to 3 pages / 300 repos) and forks (up to 2 pages / 200 repos)
     sub_queries = [
-        (base_query, 3),
-        (base_query + " fork:only", 2),
+        (base_query, 5),
+        (base_query + " fork:only", 5),
     ]
     
     for q, max_pages in sub_queries:

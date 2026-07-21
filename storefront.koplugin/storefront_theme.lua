@@ -12,6 +12,7 @@ local storefront_theme = {
     border_preview = sc(2),
     color_border = Blitbuffer.COLOR_DARK_GRAY,
     color_bg = Blitbuffer.COLOR_WHITE,
+    color_bg_dim = Blitbuffer.COLOR_LIGHT_GRAY,
     color_label_dim = Blitbuffer.Color8(120),
     color_section_rule = Blitbuffer.COLOR_DARK_GRAY,
     radius_window = 0,

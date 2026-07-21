@@ -86,11 +86,28 @@ function InstallStore.savePatches(entries)
     return writeStore(data)
 end
 
+local function isRecordEqual(a, b)
+    if a == b then return true end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    return a.owner == b.owner
+       and a.repo == b.repo
+       and a.repo_full_name == b.repo_full_name
+       and a.repo_id == b.repo_id
+       and a.branch == b.branch
+       and a.sha == b.sha
+       and a.path == b.path
+       and a.is_auto_matched == b.is_auto_matched
+end
+
 function InstallStore.upsert(plugin_id, record)
     if not plugin_id or plugin_id == "" then
         return false
     end
     local data = readStore()
+    local existing = data.plugins[plugin_id]
+    if isRecordEqual(existing, record) then
+        return true
+    end
     data.plugins[plugin_id] = record
     return writeStore(data)
 end
@@ -105,6 +122,9 @@ function InstallStore.upsertPatch(filename, record)
     -- This ensures install SHA is not lost when matching an already-installed patch.
     if existing and existing.sha and not record.sha then
         record.sha = existing.sha
+    end
+    if isRecordEqual(existing, record) then
+        return true
     end
     data.patches[filename] = record
     return writeStore(data)

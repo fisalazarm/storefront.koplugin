@@ -191,7 +191,43 @@ function StorefrontSettingsCard.show(Storefront)
             return item
         end
 
-        -- 1. Refresh Cache Row
+        local StorefrontSettings = require("luasettings"):open(require("datastorage"):getSettingsDir() .. "/Storefront.lua")
+
+        local function create_section_header(title)
+            local label = TextWidget:new{
+                text = title:upper(),
+                face = Font:getFace("cfont", ui_font_size - 3),
+                bold = true,
+                fgcolor = Blitbuffer.COLOR_BLACK,
+            }
+            return FrameContainer:new{
+                padding = sc(5),
+                padding_left = sc(8),
+                bordersize = 0,
+                width = dialog_w - sc(4),
+                background = Blitbuffer.COLOR_LIGHT_GRAY,
+                label,
+            }
+        end
+
+        -- SECTION 1: CATALOG & CACHE
+        table.insert(content_vg, create_section_header(_("Catalog & Cache")))
+
+        -- Catalog Source Row
+        local catalog_mode = GitHubClient.getCatalogMode()
+        local catalog_mode_label = (catalog_mode == "static") and _("Storefront") or _("Direct GitHub API")
+        local catalog_widget = TextWidget:new{
+            text = catalog_mode_label,
+            face = Font:getFace("cfont", ui_font_size - 1),
+            fgcolor = storefront_theme.color_label_dim,
+        }
+        table.insert(content_vg, create_setting_row(nil, _("Catalog source"), catalog_widget, function()
+            local next_mode = (catalog_mode == "static") and "direct" or "static"
+            GitHubClient.setCatalogMode(next_mode)
+            refresh()
+        end))
+
+        -- Refresh Cache Row
         local ts = Cache.getLastFetched(current_kind)
         local time_str = ts and ts > 0 and os.date("%H:%M", ts) or "Never"
         local total_repos = #Cache.listRepos(current_kind)
@@ -206,56 +242,33 @@ function StorefrontSettingsCard.show(Storefront)
             Storefront:browserRefresh()
         end))
 
-        -- Divider line
-        table.insert(content_vg, LineWidget:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.COLOR_DARK_GRAY,
-        })
-
-        -- 1b. Clear README Cache Row
+        -- Clear README Cache Row
         table.insert(content_vg, create_setting_row(nil, _("Clear README cache"), nil, function()
             UIManager:close(overlay, "ui")
             Storefront:clearCachedReadmeFiles()
         end))
 
-        -- Divider line
-        table.insert(content_vg, LineWidget:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.COLOR_DARK_GRAY,
-        })
+        -- SECTION 2: SEARCH & API
+        table.insert(content_vg, create_section_header(_("Search & API")))
 
-        -- 2. Include 0-star forks Row
-        local include_zero = Storefront.browser_state.include_zero_star_forks == true
+        -- Include 0-star forks Row
+        local include_zero = StorefrontSettings:readSetting("include_zero_star_forks") == true
+            or (Storefront.browser_state and Storefront.browser_state.include_zero_star_forks == true)
         local fork_indicator = include_zero and "☑" or "☐"
         table.insert(content_vg, create_setting_row(fork_indicator, _("Include 0-star forks"), nil, function()
-            Storefront.browser_state.include_zero_star_forks = not include_zero
-            Storefront:saveBrowserState()
+            local next_val = not include_zero
+            StorefrontSettings:saveSetting("include_zero_star_forks", next_val)
+            StorefrontSettings:flush()
+            if Storefront.browser_state then
+                Storefront.browser_state.include_zero_star_forks = next_val
+                Storefront:saveBrowserState()
+            end
+            Storefront._repo_descriptors_cache = nil
             refresh()
         end))
 
-        -- 2b. Catalog Source Row
-        local catalog_mode = GitHubClient.getCatalogMode()
-        local catalog_mode_label = (catalog_mode == "static") and _("Storefront") or _("Direct GitHub API")
-        local catalog_widget = TextWidget:new{
-            text = catalog_mode_label,
-            face = Font:getFace("cfont", ui_font_size - 1),
-            fgcolor = storefront_theme.color_label_dim,
-        }
-        table.insert(content_vg, create_setting_row(nil, _("Catalog source"), catalog_widget, function()
-            local next_mode = (catalog_mode == "static") and "direct" or "static"
-            GitHubClient.setCatalogMode(next_mode)
-            refresh()
-        end))
-
-        -- Divider line
-        table.insert(content_vg, LineWidget:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.COLOR_DARK_GRAY,
-        })
-
-        -- 3. GitHub Token Row
+        -- GitHub Token Row
         local github_configured = GitHubClient.hasAuthToken()
-
         local token_status_text = github_configured and _("Configured ✓") or _("Not set")
         local token_widget = TextWidget:new{
             text = token_status_text,
@@ -306,13 +319,10 @@ function StorefrontSettingsCard.show(Storefront)
             token_dialog:onShowKeyboard()
         end))
 
-        -- Divider line
-        table.insert(content_vg, LineWidget:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.COLOR_DARK_GRAY,
-        })
+        -- SECTION 3: ABOUT STOREFRONT
+        table.insert(content_vg, create_section_header(_("About Storefront")))
 
-        -- 3b. About Storefront Row
+        -- About Storefront Row
         local StorefrontAboutDialog = require("storefront_about_dialog")
         local current_ch = StorefrontAboutDialog.getChannel()
         local version_str = StorefrontAboutDialog.getVersion()
@@ -328,13 +338,7 @@ function StorefrontSettingsCard.show(Storefront)
             end)
         end))
 
-        -- Divider line
-        table.insert(content_vg, LineWidget:new{
-            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
-            background = Blitbuffer.COLOR_DARK_GRAY,
-        })
-
-        -- 3c. Update channel Row
+        -- Update channel Row
         local ch_label = (current_ch == "beta") and _("Beta") or _("Stable")
         local ch_widget = TextWidget:new{
             text = ch_label,
