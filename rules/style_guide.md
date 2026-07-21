@@ -121,3 +121,46 @@ local btn_row = HorizontalGroup:new{
 
 - Modals and settings cards should require deliberate actions to close (clicking an explicit "Close" / "Back" button or pressing the hardware Back key).
 - Avoid full-screen `Tap` event catchers on modal background overlays, preventing accidental background taps from misfiring onto underlying e-ink hit targets.
+
+---
+
+## 6. Icons & SVG Assets
+
+Storefront uses vector SVG icons from the **Feather Icons** library stored under `storefront.koplugin/assets/`.
+
+### Available SVG Icon Set
+
+| Icon Asset | Visual Concept | Usage in Storefront |
+|---|---|---|
+| `zap.svg` | Lightning Bolt | Storefront plugin header branding logo |
+| `settings.svg` | Gear / Cog | Open main settings card |
+| `search.svg` | Magnifying Glass | Search input & filter actions |
+| `rotate-cw.svg` / `refresh-cw.svg` | Refresh Arrow | Refresh cache button (browser header & settings) |
+| `info.svg` | Info Circle | "About Storefront" settings row & info popups |
+| `square.svg` / `check-square.svg` | Checkboxes | Unchecked / checked list filter states |
+
+### Asset Resolution & Rendering Rules
+
+1. **Dynamic Asset Path Resolution**: Always locate asset files relative to the current Lua module using `debug.getinfo(1, "S")`:
+   ```lua
+   local function getAssetPath(filename)
+       local info = debug.getinfo(1, "S")
+       local dir = info.source:match("^@(.*[/\\])") or ""
+       return dir .. "assets/" .. filename
+   end
+   ```
+
+2. **Render with `ImageWidget`**: KOReader's `IconWidget`/`IconButton` cannot load custom plugin asset paths (it only resolves bare icon names against KOReader's internal core resources). Always use `ImageWidget` with `scale_factor = 0` and `alpha = true` for SVG transparency:
+   ```lua
+   local icon = ImageWidget:new{
+       file = getAssetPath("info.svg"),
+       width = sc(20),
+       height = sc(20),
+       scale_factor = 0,
+       alpha = true,
+   }
+   ```
+
+3. **Icon Sizing Standard**:
+   - Header logos / major icons: `sc(24)`
+   - Setting row & button icons: `sc(20)`

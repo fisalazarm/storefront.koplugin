@@ -16,6 +16,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local MovableContainer = require("ui/widget/container/movablecontainer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
+local ImageWidget = require("ui/widget/imagewidget")
 local LineWidget = require("ui/widget/linewidget")
 local InputDialog = require("ui/widget/inputdialog")
 local InfoMessage = require("ui/widget/infomessage")
@@ -28,6 +29,12 @@ local StorefrontSettingsCard = {}
 
 local function sc(val)
     return Screen:scaleBySize(val)
+end
+
+local function getAssetPath(filename)
+    local info = debug.getinfo(1, "S")
+    local dir = info.source:match("^@(.*[/\\])") or ""
+    return dir .. "assets/" .. filename
 end
 
 function StorefrontSettingsCard.show(Storefront)
@@ -75,18 +82,33 @@ function StorefrontSettingsCard.show(Storefront)
         }
 
         -- Helper to create setting row
-        local function create_setting_row(icon_text, left_text, right_widget, callback)
+        local function create_setting_row(icon_arg, left_text, right_widget, callback)
             local row_elements = {}
 
-            -- Icon (represented as text/unicode character or emoji-like indicator)
-            if icon_text then
-                local icon = TextWidget:new{
-                    text = icon_text,
-                    face = Font:getFace("cfont", ui_font_size),
-                    fgcolor = callback and Blitbuffer.COLOR_BLACK or storefront_theme.color_label_dim,
-                }
-                table.insert(row_elements, icon)
-                table.insert(row_elements, HorizontalSpan:new{ width = sc(8) })
+            -- Icon (represented as table/widget, SVG asset filename, or unicode text)
+            if icon_arg then
+                local icon_widget
+                if type(icon_arg) == "table" then
+                    icon_widget = icon_arg
+                elseif type(icon_arg) == "string" and icon_arg:match("%.svg$") then
+                    icon_widget = ImageWidget:new{
+                        file = getAssetPath(icon_arg),
+                        width = sc(20),
+                        height = sc(20),
+                        scale_factor = 0,
+                        alpha = true,
+                    }
+                elseif type(icon_arg) == "string" then
+                    icon_widget = TextWidget:new{
+                        text = icon_arg,
+                        face = Font:getFace("cfont", ui_font_size),
+                        fgcolor = callback and Blitbuffer.COLOR_BLACK or storefront_theme.color_label_dim,
+                    }
+                end
+                if icon_widget then
+                    table.insert(row_elements, icon_widget)
+                    table.insert(row_elements, HorizontalSpan:new{ width = sc(8) })
+                end
             end
 
             -- Left Text
@@ -129,11 +151,6 @@ function StorefrontSettingsCard.show(Storefront)
                         range = function()
                             local dim = item.dimen
                             if not dim then
-                                -- Not painted/positioned yet -- return a range
-                                -- that can never match a real tap, instead of
-                                -- falling back to (0,0), which could otherwise
-                                -- overlap a genuine tap outside this row (e.g.
-                                -- one meant to dismiss the whole card).
                                 return Geom:new{ x = -1, y = -1, w = 1, h = 1 }
                             end
                             return Geom:new{
@@ -163,7 +180,7 @@ function StorefrontSettingsCard.show(Storefront)
             face = Font:getFace("cfont", ui_font_size - 2),
             fgcolor = storefront_theme.color_label_dim,
         }
-        table.insert(content_vg, create_setting_row("↻", _("Refresh cache"), meta_widget, function()
+        table.insert(content_vg, create_setting_row("rotate-cw.svg", _("Refresh cache"), meta_widget, function()
             UIManager:close(overlay, "ui")
             Storefront:browserRefresh()
         end))
@@ -174,10 +191,7 @@ function StorefrontSettingsCard.show(Storefront)
             background = Blitbuffer.COLOR_DARK_GRAY,
         })
 
-        -- 1b. Clear README Cache Row -- frees the disk space used by cached
-        -- README HTML/images (storefront_repo_content.lua), separate from
-        -- the plugin/patch list refreshed above. Prompts for confirmation
-        -- itself (see Storefront:clearCachedReadmeFiles in main.lua).
+        -- 1b. Clear README Cache Row
         table.insert(content_vg, create_setting_row(nil, _("Clear README cache"), nil, function()
             UIManager:close(overlay, "ui")
             Storefront:clearCachedReadmeFiles()
@@ -267,14 +281,32 @@ function StorefrontSettingsCard.show(Storefront)
         local StorefrontAboutDialog = require("storefront_about_dialog")
         local current_ch = StorefrontAboutDialog.getChannel()
         local version_str = StorefrontAboutDialog.getVersion()
-        local ch_label = (current_ch == "beta") and _("Beta") or _("Stable")
-        local right_text = string.format("v%s · %s", version_str, ch_label)
-        local ch_widget = TextWidget:new{
-            text = right_text,
+        local ver_widget = TextWidget:new{
+            text = string.format("v%s", version_str),
             face = Font:getFace("cfont", ui_font_size - 1),
             fgcolor = storefront_theme.color_label_dim,
         }
-        table.insert(content_vg, create_setting_row("ℹ", _("About Storefront"), ch_widget, function()
+        table.insert(content_vg, create_setting_row("info.svg", _("About Storefront"), ver_widget, function()
+            UIManager:close(overlay, "ui")
+            StorefrontAboutDialog.show(Storefront, function()
+                StorefrontSettingsCard.show(Storefront)
+            end)
+        end))
+
+        -- Divider line
+        table.insert(content_vg, LineWidget:new{
+            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
+            background = Blitbuffer.COLOR_DARK_GRAY,
+        })
+
+        -- 3c. Update channel Row
+        local ch_label = (current_ch == "beta") and _("Beta") or _("Stable")
+        local ch_widget = TextWidget:new{
+            text = ch_label,
+            face = Font:getFace("cfont", ui_font_size - 1),
+            fgcolor = storefront_theme.color_label_dim,
+        }
+        table.insert(content_vg, create_setting_row(nil, _("Update channel"), ch_widget, function()
             UIManager:close(overlay, "ui")
             StorefrontAboutDialog.show(Storefront, function()
                 StorefrontSettingsCard.show(Storefront)
