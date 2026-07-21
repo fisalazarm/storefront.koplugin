@@ -266,9 +266,11 @@ function StorefrontSettingsCard.show(Storefront)
         -- 3b. About Storefront Row
         local StorefrontAboutDialog = require("storefront_about_dialog")
         local current_ch = StorefrontAboutDialog.getChannel()
+        local version_str = StorefrontAboutDialog.getVersion()
         local ch_label = (current_ch == "beta") and _("Beta") or _("Stable")
+        local right_text = string.format("v%s · %s", version_str, ch_label)
         local ch_widget = TextWidget:new{
-            text = ch_label,
+            text = right_text,
             face = Font:getFace("cfont", ui_font_size - 1),
             fgcolor = storefront_theme.color_label_dim,
         }

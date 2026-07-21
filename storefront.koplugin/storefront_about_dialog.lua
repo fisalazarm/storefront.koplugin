@@ -46,6 +46,11 @@ local function loadStorefrontMeta()
     }
 end
 
+function StorefrontAboutDialog.getVersion()
+    local meta = loadStorefrontMeta()
+    return meta and meta.version or "1.0.0"
+end
+
 -- Channel Settings Storage
 local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront_channel.lua"
 local ChannelSettings = LuaSettings:open(SETTINGS_PATH)
