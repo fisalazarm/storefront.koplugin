@@ -130,7 +130,9 @@ function Cache.storeRepos(kind, repos)
     end
     
     local function getOwnerLogin(owner)
-        if type(owner) == "table" and owner.login then
+        if type(owner) == "string" then
+            return owner
+        elseif type(owner) == "table" and owner.login then
             return tostring(owner.login)
         end
         return ""

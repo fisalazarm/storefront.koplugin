@@ -72,13 +72,46 @@ local widgets = {
     "ui/gesturerange",
     "ui/widget/htmlboxwidget",
     "ui/widget/inputdialog",
-    "logger",
     "libs/libkoreader-lfs",
     "json",
     "socket.url",
     "ui/widget/textviewer",
     "apps/filemanager/filemanager",
     "socket.http",
+    "ui/widget/confirmbox",
+    "ui/widget/multiinputdialog",
+    "ui/widget/checkbutton",
+    "ui/widget/buttondialog",
+    "storefront_repo_content",
+    "storefront_installs",
+    "storefront_plugin_paths",
+    "ffi/archiver",
+    "ffi/sha2",
+    "socketutil",
+    "socket",
+}
+
+package.loaded["logger"] = {
+    info = function() end,
+    warn = function() end,
+    dbg = function() end,
+    err = function() end,
+}
+
+package.loaded["storefront_logger"] = {
+    log = function() end,
+    clear = function() end,
+}
+
+package.loaded["storefront_net_github"] = {
+    hasAuthToken = function() return false end,
+    getCatalogMode = function() return "static" end,
+    setCatalogMode = function() end,
+    isDirectApiEnabled = function() return false end,
+}
+
+package.loaded["storefront_updates_ui"] = {
+    init = function() end,
 }
 
 for _, w in ipairs(widgets) do
@@ -90,6 +123,13 @@ package.loaded["util"] = {
     writeToFile = function(content, path) return true end,
     readFromFile = function(path) return "mock readme content" end,
     trim = function(str) return str and str:gsub("^%s*(.-)%s*$", "%1") or "" end,
+}
+
+local registered_actions = {}
+package.loaded["dispatcher"] = {
+    registerAction = function(self, id, action)
+        registered_actions[id] = action
+    end,
 }
 
 package.loaded["storefront_cache"] = {
@@ -159,6 +199,7 @@ package.loaded["ui/uimanager"] = {
     show = function() end,
     close = function() end,
     setDirty = function() end,
+    nextTick = function(self, func) if type(self) == "function" then self() elseif func then func() end end,
 }
 
 -- Setup basic reader settings mock
@@ -258,10 +299,7 @@ if ok_browser then
                 kind = "plugin",
             }
         end)
-        check("Details dialog instantiated without crash", details_ok, true)
-        if not details_ok then
-            print("Details dialog error was:", details_err)
-        end
+        check("Details dialog loaded successfully", details_ok, true)
     end
 end
 

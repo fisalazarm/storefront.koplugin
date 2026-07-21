@@ -1,57 +1,68 @@
-local Device = require("device")
-local DataStorage = require("datastorage")
-local LuaSettings = require("luasettings")
-local UIManager = require("ui/uimanager")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local InputContainer = require("ui/widget/container/inputcontainer")
-local FocusManager = require("ui/widget/focusmanager")
-local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
-local Geom = require("ui/geometry")
-local GestureRange = require("ui/gesturerange")
-local TitleBar = require("ui/widget/titlebar")
-local Button = require("ui/widget/button")
-local HorizontalGroup = require("ui/widget/horizontalgroup")
-local HorizontalSpan = require("ui/widget/horizontalspan")
-local VerticalSpan = require("ui/widget/verticalspan")
-local LineWidget = require("ui/widget/linewidget")
-local Size = require("ui/size")
-local Blitbuffer = require("ffi/blitbuffer")
-local ConfirmBox = require("ui/widget/confirmbox")
-local InfoMessage = require("ui/widget/infomessage")
-local TextViewer = require("ui/widget/textviewer")
-local TextWidget = require("ui/widget/textwidget")
-local TextBoxWidget = require("ui/widget/textboxwidget")
-local MultiInputDialog = require("ui/widget/multiinputdialog")
-local CheckButton = require("ui/widget/checkbutton")
-local ButtonDialog = require("ui/widget/buttondialog")
-local SpinWidget = require("ui/widget/spinwidget")
-local Font = require("ui/font")
-local Dispatcher = require("dispatcher")
-local InputDialog = require("ui/widget/inputdialog")
-local VerticalGroup = require("ui/widget/verticalgroup")
-local FrameContainer = require("ui/widget/container/framecontainer")
-local CenterContainer = require("ui/widget/container/centercontainer")
-local RightContainer = require("ui/widget/container/rightcontainer")
-local OverlapGroup = require("ui/widget/overlapgroup")
-local _ = require("gettext")
+local R = {
+    Device = require("device"),
+    DataStorage = require("datastorage"),
+    LuaSettings = require("luasettings"),
+    UIManager = require("ui/uimanager"),
+    WidgetContainer = require("ui/widget/container/widgetcontainer"),
+    InputContainer = require("ui/widget/container/inputcontainer"),
+    FocusManager = require("ui/widget/focusmanager"),
+    ScrollableContainer = require("ui/widget/container/scrollablecontainer"),
+    Geom = require("ui/geometry"),
+    GestureRange = require("ui/gesturerange"),
+    TitleBar = require("ui/widget/titlebar"),
+    Button = require("ui/widget/button"),
+    HorizontalGroup = require("ui/widget/horizontalgroup"),
+    HorizontalSpan = require("ui/widget/horizontalspan"),
+    VerticalSpan = require("ui/widget/verticalspan"),
+    LineWidget = require("ui/widget/linewidget"),
+    Size = require("ui/size"),
+    Blitbuffer = require("ffi/blitbuffer"),
+    ConfirmBox = require("ui/widget/confirmbox"),
+    InfoMessage = require("ui/widget/infomessage"),
+    TextViewer = require("ui/widget/textviewer"),
+    TextWidget = require("ui/widget/textwidget"),
+    TextBoxWidget = require("ui/widget/textboxwidget"),
+    MultiInputDialog = require("ui/widget/multiinputdialog"),
+    CheckButton = require("ui/widget/checkbutton"),
+    ButtonDialog = require("ui/widget/buttondialog"),
+    SpinWidget = require("ui/widget/spinwidget"),
+    Font = require("ui/font"),
+    Dispatcher = require("dispatcher"),
+    InputDialog = require("ui/widget/inputdialog"),
+    VerticalGroup = require("ui/widget/verticalgroup"),
+    FrameContainer = require("ui/widget/container/framecontainer"),
+    CenterContainer = require("ui/widget/container/centercontainer"),
+    RightContainer = require("ui/widget/container/rightcontainer"),
+    OverlapGroup = require("ui/widget/overlapgroup"),
+    _ = require("gettext"),
+    Cache = require("storefront_cache"),
+    GitHub = require("storefront_net_github"),
+    RepoContent = require("storefront_repo_content"),
+    InstallStore = require("storefront_installs"),
+    util = require("util"),
+    NetworkMgr = require("ui/network/manager"),
+    socketutil = require("socketutil"),
+    socket = require("socket"),
+    http = require("socket.http"),
+    ltn12 = require("ltn12"),
+    Archiver = require("ffi/archiver"),
+    sha2 = require("ffi/sha2"),
+    lfs = require("libs/libkoreader-lfs"),
+    json = require("json"),
+    logger = require("logger"),
+    StorefrontLogger = require("storefront_logger"),
+}
+R.Input = R.Device.input
 
-local Input = Device.input
+setfenv(1, setmetatable({}, {
+    __index = function(t, k)
+        return R[k] or _G[k]
+    end,
+    __newindex = _G,
+}))
 
-local Cache = require("storefront_cache")
-local GitHub = require("storefront_net_github")
-local RepoContent = require("storefront_repo_content")
-local InstallStore = require("storefront_installs")
-local util = require("util")
-local NetworkMgr = require("ui/network/manager")
-local socketutil = require("socketutil")
-local socket = require("socket")
-local http = require("socket.http")
-local ltn12 = require("ltn12")
-local Archiver = require("ffi/archiver")
-local sha2 = require("ffi/sha2")
-local lfs = require("libs/libkoreader-lfs")
-local json = require("json")
-local logger = require("logger")
+StorefrontLogger.log("==========================================")
+StorefrontLogger.log("Storefront module loaded (main.lua)")
 
 local SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront.lua"
 local StorefrontSettings = LuaSettings:open(SETTINGS_PATH)
@@ -81,7 +92,7 @@ local PluginPaths = require("storefront_plugin_paths")
 local PATCHES_ROOT = DataStorage:getDataDir() .. "/patches"
 
 local Storefront = WidgetContainer:extend{
-    name = "Storefront",
+    name = "storefront",
     is_doc_only = false,
     is_refreshing = false,
     browser_state = nil,
@@ -176,26 +187,7 @@ local function isReleaseIgnored(owner, repo_name, version)
 end
 
 
-local extractRepoOwner
-local ensureCacheDir
-local ensurePatchesDir
-local downloadToFile
-local buildPatchDownloadUrl
-local derivePluginRepoPath
-local sanitizeMetaPath
-local fetchGitHubRaw
-local formatTimestamp
-local parseGitHubTimestamp
-local buildRepoDescriptorFromRecord
-local buildBranchCandidates
-local getRepoDefaultBranch
-local extractMetaField
-local getPatchRecordsMap
-local extractPluginToUserDir
-local extractReleaseNameFallback
-local detectPluginFromArchiveWithFallback
-local renderReleaseNotesText
-local softWrapLongTokens
+local extractRepoOwner, ensureCacheDir, ensurePatchesDir, downloadToFile, buildPatchDownloadUrl, derivePluginRepoPath, sanitizeMetaPath, fetchGitHubRaw, formatTimestamp, parseGitHubTimestamp, buildRepoDescriptorFromRecord, buildBranchCandidates, getRepoDefaultBranch, extractMetaField, getPatchRecordsMap, extractPluginToUserDir, extractReleaseNameFallback, detectPluginFromArchiveWithFallback, renderReleaseNotesText, softWrapLongTokens
 
 local function buildPatchRepoDescriptor(record)
     if not record or not record.owner or not record.repo then
@@ -6832,6 +6824,7 @@ end
 
 function Storefront:showBrowser(kind)
     logger.info("Storefront: showBrowser called")
+    StorefrontLogger.log("showBrowser() called (kind=" .. tostring(kind) .. ")")
     self:ensureBrowserState()
     if self.browser_menu then
         self:closeBrowserMenu()
@@ -6845,8 +6838,14 @@ function Storefront:showBrowser(kind)
     self.auto_refreshed = self.auto_refreshed or {}
     
     if not self.auto_refreshed[check_kind] then
-        if not last_fetched or last_fetched == 0 then
-            self.auto_refreshed[check_kind] = true
+        self.auto_refreshed[check_kind] = true
+        if not GitHub.isDirectApiEnabled() then
+            -- In static catalog mode, quietly update catalog in background if online
+            NetworkMgr:runWhenOnline(function()
+                local CatalogClient = require("storefront_net_catalog")
+                CatalogClient.fetchAndUpdateCache()
+            end)
+        elseif not last_fetched or last_fetched == 0 then
             UIManager:nextTick(function()
                 UIManager:show(ConfirmBox:new{
                     text = _("The Storefront cache is empty. Would you like to download the plugin list from GitHub now?"),
@@ -6858,7 +6857,6 @@ function Storefront:showBrowser(kind)
                 })
             end)
         elseif os.time() - last_fetched > 604800 then
-            self.auto_refreshed[check_kind] = true
             UIManager:nextTick(function()
                 UIManager:show(ConfirmBox:new{
                     text = _("The Storefront cache is over a week old. Would you like to update the plugin list from GitHub?"),
@@ -8468,11 +8466,6 @@ function Storefront:refreshCache(kind)
     end
     self:ensureBrowserState()
     kind = kind or (self.browser_state and self.browser_state.kind) or "plugin"
-    local refresh_plugins = (kind == "plugin") or (kind == "all")
-    local refresh_patches = (kind == "patch") or (kind == "all")
-    if not refresh_plugins and not refresh_patches then
-        return
-    end
 
     self.is_refreshing = true
     self.patch_cache = {}
@@ -8482,6 +8475,24 @@ function Storefront:refreshCache(kind)
 
     local summary
     local ok, err = pcall(function()
+        local CatalogClient = require("storefront_net_catalog")
+        if not GitHub.isDirectApiEnabled() then
+            logger.info("Storefront: refreshing via static catalog feed")
+            local catalog_ok, catalog_err = CatalogClient.fetchAndUpdateCache()
+            if catalog_ok then
+                local p_count = Cache.countRepos("plugin")
+                local pt_count = Cache.countRepos("patch")
+                summary = string.format(_("Catalog updated: %d plugins, %d patches."), p_count, pt_count)
+                StorefrontSettings:saveSetting("status_text", summary)
+                StorefrontSettings:flush()
+                return
+            else
+                logger.warn("Storefront static catalog update failed, falling back to direct API", catalog_err)
+            end
+        end
+
+        local refresh_plugins = (kind == "plugin") or (kind == "all")
+        local refresh_patches = (kind == "patch") or (kind == "all")
         local summary_parts = {}
         if refresh_plugins then
             local plugin_total = self:fetchAndStore("plugin", PLUGIN_TOPICS, "Plugin", PLUGIN_NAME_QUERIES)
@@ -8512,6 +8523,8 @@ function Storefront:refreshCache(kind)
 end
 
 function Storefront:init()
+    StorefrontLogger.log("Storefront:init() called")
+    Storefront.instance = self
     self.cache_dir = ensureCacheDir()
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
@@ -8545,11 +8558,13 @@ local function injectStorefrontIntoToolsMenu()
 end
 
 function Storefront:addToMainMenu(menu_items)
+    StorefrontLogger.log("Storefront:addToMainMenu() called")
     injectStorefrontIntoToolsMenu()
     menu_items.Storefront = {
         sorting_hint = "tools",
         text = _("Storefront"),
         callback = function()
+            StorefrontLogger.log("Main menu item Storefront clicked")
             self:showBrowser()
         end,
     }
@@ -8569,6 +8584,7 @@ function Storefront:onOpenStorefrontMenu()
         self:showBrowser()
     end)
 end
+
 Storefront.listInstalledPlugins = listInstalledPlugins
 Storefront.listInstalledPatches = listInstalledPatches
 Storefront.getInstallRecordsMap = getInstallRecordsMap

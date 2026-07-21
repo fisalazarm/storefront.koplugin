@@ -233,6 +233,20 @@ function StorefrontSettingsCard.show(Storefront)
             refresh()
         end))
 
+        -- 2b. Catalog Source Row
+        local catalog_mode = GitHubClient.getCatalogMode()
+        local catalog_mode_label = (catalog_mode == "static") and _("Static Catalog") or _("Direct GitHub API")
+        local catalog_widget = TextWidget:new{
+            text = catalog_mode_label,
+            face = Font:getFace("cfont", ui_font_size - 1),
+            fgcolor = storefront_theme.color_label_dim,
+        }
+        table.insert(content_vg, create_setting_row(nil, _("Catalog source"), catalog_widget, function()
+            local next_mode = (catalog_mode == "static") and "direct" or "static"
+            GitHubClient.setCatalogMode(next_mode)
+            refresh()
+        end))
+
         -- Divider line
         table.insert(content_vg, LineWidget:new{
             dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },

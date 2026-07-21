@@ -25,22 +25,7 @@ local USER_AGENT = "KOReader-Storefront"
 local AUTH_SETTINGS_PATH = DataStorage:getSettingsDir() .. "/Storefront_github.lua"
 local AuthSettings = LuaSettings:open(AUTH_SETTINGS_PATH)
 local TOKEN_KEY = "github_token"
-
-local function joinQueryParts(parts)
-    if not parts or #parts == 0 then
-        return ""
-    end
-    return table.concat(parts, " ")
-end
-
-local function newTableSink(target)
-    return function(chunk, err)
-        if chunk then
-            target[#target + 1] = chunk
-        end
-        return 1, err
-    end
-end
+local CATALOG_MODE_KEY = "catalog_mode"
 
 -- Returns the configured PAT, preferring the one saved via the Settings UI
 -- over the legacy storefront_configuration.lua file (kept for users who
@@ -56,6 +41,34 @@ function GitHubClient.getToken()
         return token
     end
     return nil
+end
+
+function GitHubClient.hasAuthToken()
+    return GitHubClient.getToken() ~= nil
+end
+
+function GitHubClient.getCatalogMode()
+    local saved = AuthSettings:readSetting(CATALOG_MODE_KEY)
+    if saved == "direct" or saved == "static" then
+        return saved
+    end
+    if GitHubClient.hasAuthToken() then
+        return "direct"
+    end
+    return "static"
+end
+
+function GitHubClient.setCatalogMode(mode)
+    if mode == "direct" or mode == "static" then
+        AuthSettings:saveSetting(CATALOG_MODE_KEY, mode)
+    else
+        AuthSettings:delSetting(CATALOG_MODE_KEY)
+    end
+    AuthSettings:flush()
+end
+
+function GitHubClient.isDirectApiEnabled()
+    return GitHubClient.getCatalogMode() == "direct"
 end
 
 -- Saves (or, when token is nil/empty, clears) the PAT entered via the
