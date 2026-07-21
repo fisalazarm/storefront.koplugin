@@ -5,7 +5,10 @@ local logger = require("logger")
 local DataStorage = require("datastorage")
 local LuaSettings = require("luasettings")
 
-local ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
+local ok_cfg, StorefrontConfig = pcall(require, "storefront_config")
+if not ok_cfg then
+    ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
+end
 if not ok_cfg then
     StorefrontConfig = {}
 end

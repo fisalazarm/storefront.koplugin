@@ -7692,6 +7692,13 @@ extractPluginToUserDir = function(reader, info, dest_root)
     util.makePath(dest_root)
     local target_dir = dest_root .. "/" .. info.plugin_dirname
 
+    -- Protected configuration files that must NOT be overwritten when updating
+    -- an existing plugin directory (preserving user-edited tokens/settings).
+    local protected_configs = {
+        ["storefront_config.lua"] = true,
+        ["storefront_configuration.lua"] = true,
+    }
+
     -- Collect the set of relative paths coming from the archive so we can
     -- remove only those files before extraction.  Files that exist locally
     -- but are NOT in the archive (e.g. user-created configuration files)
@@ -7718,7 +7725,7 @@ extractPluginToUserDir = function(reader, info, dest_root)
                     local mode = lfs.attributes(full, "mode")
                     if mode == "directory" then
                         remove_archive_files(full, rel)
-                    elseif mode == "file" and archive_relatives[rel] then
+                    elseif mode == "file" and archive_relatives[rel] and not protected_configs[rel] then
                         os.remove(full)
                     end
                 end
@@ -7729,28 +7736,25 @@ extractPluginToUserDir = function(reader, info, dest_root)
 
     for entry in reader:iterate() do
         if entry.mode == "file" then
+            local relative
             if info.plugin_root == "" then
-                -- Rootless archive: copy every file.
-                local relative = entry.path
-                local dest_path = target_dir .. "/" .. relative
-                local parent = dest_path:match("^(.*)/")
-                if parent and parent ~= "" then
-                    util.makePath(parent)
-                end
-                local ok = reader:extractToPath(entry.path, dest_path)
-                if not ok then
-                    return false, _("Failed to extract file: ") .. entry.path
-                end
+                relative = entry.path
             elseif entry.path:sub(1, #info.plugin_root + 1) == info.plugin_root .. "/" then
-                local relative = entry.path:sub(#info.plugin_root + 2)
+                relative = entry.path:sub(#info.plugin_root + 2)
+            end
+
+            if relative then
                 local dest_path = target_dir .. "/" .. relative
-                local parent = dest_path:match("^(.*)/")
-                if parent and parent ~= "" then
-                    util.makePath(parent)
-                end
-                local ok = reader:extractToPath(entry.path, dest_path)
-                if not ok then
-                    return false, _("Failed to extract file: ") .. entry.path
+                -- Preserve existing user configuration files during updates
+                if not (protected_configs[relative] and lfs.attributes(dest_path, "mode") == "file") then
+                    local parent = dest_path:match("^(.*)/")
+                    if parent and parent ~= "" then
+                        util.makePath(parent)
+                    end
+                    local ok = reader:extractToPath(entry.path, dest_path)
+                    if not ok then
+                        return false, _("Failed to extract file: ") .. entry.path
+                    end
                 end
             end
         end
@@ -7759,7 +7763,7 @@ extractPluginToUserDir = function(reader, info, dest_root)
     return true, target_dir
 end
 
--- NOTE: Storefront_configuration and the remembered-path settings key are
+-- NOTE: Storefront_config and the remembered-path settings key are
 -- resolved locally (rather than as file-level locals like the other
 -- *_KEY constants) because main.lua's chunk is already at LuaJIT's 200
 -- local variable ceiling; scoping them to this function keeps them out of
@@ -7767,7 +7771,10 @@ end
 -- repeat calls are cheap).
 function Storefront:resolveNewInstallDestination(callback, on_cancel)
     local REMEMBERED_PLUGIN_INSTALL_PATH_KEY = "remembered_plugin_install_path"
-    local ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
+    local ok_cfg, StorefrontConfig = pcall(require, "storefront_config")
+    if not ok_cfg then
+        ok_cfg, StorefrontConfig = pcall(require, "storefront_configuration")
+    end
     if not ok_cfg then
         StorefrontConfig = {}
     end
