@@ -55,6 +55,15 @@ local overlay = InputContainer:new{
 }
 ```
 
+### 2.1 Setting Rows Right-Alignment Math
+
+In settings cards where rows have left labels and optional right-aligned values/widgets (e.g., version tags, status indicators, timestamps):
+- **Never hardcode fixed left label widths** (such as `dialog_w - sc(150)`), as long right-side strings will exceed card bounds and overflow off the right edge.
+- **Dynamic Right Alignment**: Measure available width `avail_w = dialog_w - (frame_padding * 2) - sc(4)` and right widget width `right_w = right_widget:getSize().w`.
+- **Label Constraint**: Limit left text width to `max_left_w = avail_w - icon_w - right_w - sc(8)` so text wraps cleanly if localized or long.
+- **Dynamic Spacer**: Insert a flexible `HorizontalSpan` with width `spacer_w = avail_w - icon_w - left_used_w - right_w` between the left label and right widget.
+- **Result**: All right-side values align vertically to the exact same right padding line with zero border overflow.
+
 ---
 
 ## 3. Option Picker / Radio Button Groups

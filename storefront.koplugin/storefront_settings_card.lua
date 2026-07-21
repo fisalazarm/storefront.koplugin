@@ -86,8 +86,9 @@ function StorefrontSettingsCard.show(Storefront)
             local row_elements = {}
 
             -- Icon (represented as table/widget, SVG asset filename, or unicode text)
+            local icon_widget
+            local icon_w = 0
             if icon_arg then
-                local icon_widget
                 if type(icon_arg) == "table" then
                     icon_widget = icon_arg
                 elseif type(icon_arg) == "string" and icon_arg:match("%.svg$") then
@@ -106,9 +107,24 @@ function StorefrontSettingsCard.show(Storefront)
                     }
                 end
                 if icon_widget then
+                    icon_w = (icon_widget.getSize and icon_widget:getSize().w) or sc(20)
+                    icon_w = icon_w + sc(8)
                     table.insert(row_elements, icon_widget)
                     table.insert(row_elements, HorizontalSpan:new{ width = sc(8) })
                 end
+            end
+
+            -- Measure right widget and available row width
+            local frame_padding = sc(10)
+            local avail_w = dialog_w - (frame_padding * 2) - sc(4)
+            local right_w = 0
+            if right_widget then
+                right_w = (right_widget.getSize and right_widget:getSize().w) or sc(60)
+            end
+
+            local max_left_w = avail_w - icon_w - right_w - sc(8)
+            if max_left_w < sc(60) then
+                max_left_w = sc(60)
             end
 
             -- Left Text
@@ -116,13 +132,18 @@ function StorefrontSettingsCard.show(Storefront)
                 text = left_text,
                 face = Font:getFace("cfont", ui_font_size),
                 fgcolor = callback and Blitbuffer.COLOR_BLACK or storefront_theme.color_label_dim,
-                width = dialog_w - sc(150),
+                width = max_left_w,
                 alignment = "left",
             }
             table.insert(row_elements, txt)
 
-            -- Spacer to push right widget
-            table.insert(row_elements, HorizontalSpan:new{ width = sc(8) })
+            -- Flexible Spacer to right-align right_widget
+            local left_used_w = (txt.getSize and txt:getSize().w) or max_left_w
+            local spacer_w = avail_w - icon_w - left_used_w - right_w
+            if spacer_w < sc(8) then
+                spacer_w = sc(8)
+            end
+            table.insert(row_elements, HorizontalSpan:new{ width = spacer_w })
 
             -- Right Widget (optional)
             if right_widget then
@@ -133,7 +154,7 @@ function StorefrontSettingsCard.show(Storefront)
 
             local frame = FrameContainer:new{
                 bordersize = 0,
-                padding = sc(10),
+                padding = frame_padding,
                 width = dialog_w - sc(4),
                 row_content,
             }
