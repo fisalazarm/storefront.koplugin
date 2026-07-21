@@ -2638,7 +2638,14 @@ local function findLatestStableRelease(owner, repo)
     return nil, "No stable release found"
 end
 
-function Storefront:fetchRemoteVersionForRecord(record)
+-- Pure network-fetching core of fetchRemoteVersionForRecord below -- touches
+-- no `self` state, so it's safe to run inside a forked subprocess (see
+-- Storefront:_checkSinglePluginInternal, which does exactly that so a slow
+-- or unreachable repo can't block the UI thread for several seconds).
+-- Returns remote_version, remote_repo_ts, err, release_tag_name,
+-- updated_meta_path, updated_branch -- the last two are only set when a
+-- meta_path/branch different from the record's own is the one that worked.
+local function fetchRemoteVersionCore(record)
     if not record or not record.owner or not record.repo then
         return nil, 0, _("Not matched with a repository.")
     end
@@ -2646,25 +2653,15 @@ function Storefront:fetchRemoteVersionForRecord(record)
     local owner = record.owner
     local repo_name = record.repo
     local last_err
-    
-    local latest_release, release_err = findLatestStableRelease(owner, repo_name)
-    
+
+    local latest_release = findLatestStableRelease(owner, repo_name)
+
     if latest_release and latest_release.tag_name then
         local release_version = parseVersionFromTag(latest_release.tag_name)
         local release_ts = parseGitHubTimestamp(latest_release.published_at)
-        
-        self:ensureUpdatesState()
-        local dirname = record.dirname
-        if dirname then
-            local cached = self.updates_state.remote_info[dirname] or {}
-            cached.release_tag_name = latest_release.tag_name
-            cached.release_published_at = release_ts
-            self.updates_state.remote_info[dirname] = cached
-        end
-        
         return release_version, release_ts, nil, latest_release.tag_name
     end
-    
+
     local meta_candidates = buildMetaPathCandidates(record)
     if #meta_candidates == 0 then
         return nil, 0, _("Missing meta path in record.")
@@ -2679,19 +2676,18 @@ function Storefront:fetchRemoteVersionForRecord(record)
     else
         last_err = metadata_err or last_err
     end
-    
-    for meta_idx, meta_path in ipairs(meta_candidates) do
-        for branch_idx, branch in ipairs(branch_candidates) do
+
+    for _, meta_path in ipairs(meta_candidates) do
+        for _, branch in ipairs(branch_candidates) do
             local body, err = fetchGitHubRaw(owner, repo_name, branch, meta_path)
             if body then
                 local version = extractMetaField(body, "version")
                 if version then
+                    local updated_meta_path, updated_branch
                     if record.dirname and (record.meta_path ~= meta_path or record.branch ~= branch) then
-                        self:updateInstallRecord(record.dirname, { meta_path = meta_path, branch = branch })
-                        record.meta_path = meta_path
-                        record.branch = branch
+                        updated_meta_path, updated_branch = meta_path, branch
                     end
-                    return version, remote_repo_ts, nil
+                    return version, remote_repo_ts, nil, nil, updated_meta_path, updated_branch
                 end
                 last_err = _("Remote version not found.")
             else
@@ -2711,6 +2707,34 @@ function Storefront:fetchRemoteVersionForRecord(record)
     end
 
     return nil, remote_repo_ts, last_err or _("Remote version not found.")
+end
+
+-- Applies the `self`-touching side effects that fetchRemoteVersionCore
+-- itself can't (see its comment) -- shared by fetchRemoteVersionForRecord
+-- and _checkSinglePluginInternal, the latter calling it on the parent
+-- process only after its subprocess worker has already returned.
+function Storefront:applyRemoteVersionResult(record, remote_repo_ts, release_tag_name, updated_meta_path, updated_branch)
+    if release_tag_name then
+        self:ensureUpdatesState()
+        local dirname = record.dirname
+        if dirname then
+            local cached = self.updates_state.remote_info[dirname] or {}
+            cached.release_tag_name = release_tag_name
+            cached.release_published_at = remote_repo_ts
+            self.updates_state.remote_info[dirname] = cached
+        end
+    elseif updated_meta_path then
+        self:updateInstallRecord(record.dirname, { meta_path = updated_meta_path, branch = updated_branch })
+        record.meta_path = updated_meta_path
+        record.branch = updated_branch
+    end
+end
+
+function Storefront:fetchRemoteVersionForRecord(record)
+    local remote_version, remote_repo_ts, err, release_tag_name, updated_meta_path, updated_branch =
+        fetchRemoteVersionCore(record)
+    self:applyRemoteVersionResult(record, remote_repo_ts, release_tag_name, updated_meta_path, updated_branch)
+    return remote_version, remote_repo_ts, err, release_tag_name
 end
 
 function Storefront:getUnmatchedPlugins()
@@ -3759,11 +3783,50 @@ end
 function Storefront:_checkSinglePluginInternal(record)
     self:ensureUpdatesState()
     local plugin_name = record.dirname or _("plugin")
-    local progress = InfoMessage:new{ text = string.format(_("Checking %s…"), plugin_name), timeout = 0 }
+    -- Runs the actual network fetching in a forked subprocess (same pattern
+    -- as checkAllUpdates) instead of calling fetchRemoteVersionForRecord
+    -- directly: that used to block KOReader's whole UI thread -- often for
+    -- several seconds, across multiple sequential GitHub requests -- for a
+    -- repo with a slow/unreachable connection, which looked like a freeze
+    -- or crash rather than a slow check.
+    local Trapper = require("ui/trapper")
+    local progress = InfoMessage:new{
+        text = string.format(_("Checking %s…"), plugin_name),
+        timeout = 0,
+        dismissable = false,
+    }
     UIManager:show(progress)
-    local remote_version, remote_repo_ts, err, release_tag_name = self:fetchRemoteVersionForRecord(record)
+    UIManager:forceRePaint()
+
+    local completed, result = Trapper:dismissableRunInSubprocess(function()
+        local remote_version, remote_repo_ts, err, release_tag_name, updated_meta_path, updated_branch =
+            fetchRemoteVersionCore(record)
+        return {
+            remote_version = remote_version,
+            remote_repo_ts = remote_repo_ts,
+            err = err,
+            release_tag_name = release_tag_name,
+            updated_meta_path = updated_meta_path,
+            updated_branch = updated_branch,
+        }
+    end, progress)
+
     UIManager:close(progress)
-    
+
+    if not completed then
+        UIManager:show(InfoMessage:new{ text = _("Update check was cancelled"), timeout = 4 })
+        return
+    end
+    if type(result) ~= "table" then
+        return
+    end
+
+    local remote_version = result.remote_version
+    local remote_repo_ts = result.remote_repo_ts
+    local err = result.err
+    local release_tag_name = result.release_tag_name
+    self:applyRemoteVersionResult(record, remote_repo_ts, release_tag_name, result.updated_meta_path, result.updated_branch)
+
     local cached = self.updates_state.remote_info[record.dirname] or {}
     cached.remote_version = remote_version
     cached.remote_repo_ts = remote_repo_ts
