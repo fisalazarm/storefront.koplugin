@@ -1406,22 +1406,20 @@ function Storefront:collectUpdateSummary()
             if release_tag then
                 local release_version = parseVersionFromTag(release_tag)
 
-                if release_version then
-                    if local_version then
-                        has_update = isVersionNewer(release_version, local_version)
-                    else
-                        -- No local version to compare; fall back to publish timestamp.
-                        has_update = release_ts > local_latest_ts
-                    end
+                if release_version and local_version then
+                    has_update = isVersionNewer(release_version, local_version)
+                elseif release_version then
+                    has_update = release_ts > local_latest_ts
                 else
-                    -- Fix 2: Tag isn't parseable as semver. Before using timestamp,
-                    -- check if the raw tag text equals the local version (e.g. "v2.4.4"
-                    -- vs local "2.4.4"). Equal after stripping 'v' → not an update.
                     local raw_tag = release_tag:gsub("^[vV]", "")
                     local raw_local = local_version and tostring(local_version):gsub("^[vV]", "") or nil
-                    if raw_tag ~= "" and raw_local and raw_tag == raw_local then
-                        has_update = false
-                    else
+                    if raw_tag ~= "" and raw_local then
+                        if raw_tag == raw_local then
+                            has_update = false
+                        else
+                            has_update = isVersionNewer(raw_tag, raw_local)
+                        end
+                    elseif release_ts > 0 and local_latest_ts > 0 then
                         has_update = release_ts > local_latest_ts
                     end
                 end
@@ -1440,14 +1438,10 @@ function Storefront:collectUpdateSummary()
                 local remote_version = remote.remote_version
                 local remote_repo_ts = remote.remote_repo_ts or 0
 
-                -- Fix 1: Version strings take strict priority over timestamp heuristic.
-                -- A repo push (README edit, CI fix, etc.) must NOT flag a plugin as
-                -- outdated when the version numbers are still equal.
                 if remote_version and local_version then
                     has_update = isVersionNewer(remote_version, local_version)
-                elseif remote_repo_ts > local_latest_ts then
-                    -- No version info at all; fall back to timestamp.
-                    has_update = true
+                elseif remote_repo_ts > 0 and local_latest_ts > 0 then
+                    has_update = remote_repo_ts > local_latest_ts
                 end
             end
         end
@@ -2605,11 +2599,25 @@ function Storefront:_checkAllUpdatesInternal(records)
     UIManager:setDirty(nil, "full")
 end
 
-local function findLatestStableRelease(owner, repo)
+local function findLatestRelease(owner, repo, allow_beta)
     local GitHub = require("storefront_net_github")
-    
+
+    if allow_beta then
+        local releases, fetch_err = GitHub.fetchReleases(owner, repo, {
+            per_page = 10,
+            max_pages = 1,
+        })
+        if releases and #releases > 0 then
+            for _, release in ipairs(releases) do
+                if not release.draft then
+                    return release, nil
+                end
+            end
+        end
+    end
+
     local latest, err = GitHub.fetchLatestRelease(owner, repo)
-    
+
     if latest and latest.tag_name then
         if not latest.prerelease and not latest.draft then
             if not isPreReleaseTag(latest.tag_name) then
@@ -2617,16 +2625,16 @@ local function findLatestStableRelease(owner, repo)
             end
         end
     end
-    
+
     local releases, fetch_err = GitHub.fetchReleases(owner, repo, {
         per_page = 30,
         max_pages = 1,
     })
-    
+
     if not releases or #releases == 0 then
         return nil, fetch_err or err or "No releases found"
     end
-    
+
     for _, release in ipairs(releases) do
         if not release.draft and not release.prerelease then
             if not isPreReleaseTag(release.tag_name) then
@@ -2634,7 +2642,7 @@ local function findLatestStableRelease(owner, repo)
             end
         end
     end
-    
+
     return nil, "No stable release found"
 end
 
@@ -2654,7 +2662,11 @@ local function fetchRemoteVersionCore(record)
     local repo_name = record.repo
     local last_err
 
-    local latest_release = findLatestStableRelease(owner, repo_name)
+    local is_storefront = record.dirname == "storefront.koplugin"
+        or (record.repo and record.repo:lower():match("storefront%.koplugin"))
+    local allow_beta = is_storefront and (require("storefront_about_dialog").getChannel() == "beta")
+
+    local latest_release = findLatestRelease(owner, repo_name, allow_beta)
 
     if latest_release and latest_release.tag_name then
         local release_version = parseVersionFromTag(latest_release.tag_name)
@@ -8038,9 +8050,20 @@ function Storefront:_installPluginFromRepoInternal(repo)
 end
 
 function Storefront:handlePostInstall(info, repo)
+    if info and info.plugin_dirname and (not info.plugin_version or info.plugin_version == "") then
+        local root = (self.pending_install_context and self.pending_install_context.plugin and self.pending_install_context.plugin.root)
+            or PluginPaths.getDefaultPluginsRoot()
+        local meta_path = root .. "/" .. info.plugin_dirname .. "/_meta.lua"
+        local ok_meta, meta = pcall(dofile, meta_path)
+        if ok_meta and type(meta) == "table" and meta.version then
+            info.plugin_version = meta.version
+        end
+    end
+
     self:rememberInstall(info, repo)
-    -- Ensure the screen refreshes after installation/update to clear any artifacts.
+    self._cached_plugin_summary = nil
     UIManager:setDirty(nil, "full")
+
     if not self.pending_install_context then
         return
     end
@@ -8050,18 +8073,16 @@ function Storefront:handlePostInstall(info, repo)
         local plugin = context.plugin
         local record = plugin and getRecordedInstall(plugin.dirname)
         if plugin and record then
-            -- Update the remote_info cache to reflect the newly installed version
-            -- so the plugin won't appear as outdated immediately after update
             if info.plugin_dirname then
                 self:ensureUpdatesState()
-                local cached = self.updates_state.remote_info[info.plugin_dirname]
-                if cached then
+                local cached = self.updates_state.remote_info[info.plugin_dirname] or {}
+                if info.plugin_version and info.plugin_version ~= "" then
                     cached.remote_version = info.plugin_version
-                    -- Keep the original remote_repo_ts from the last check
-                    -- (don't set to os.time() as that would be incorrect)
-                    cached.last_checked = os.time()
-                    cached.error = nil
                 end
+                cached.last_checked = os.time()
+                cached.error = nil
+                self.updates_state.remote_info[info.plugin_dirname] = cached
+                self:saveUpdatesState()
             end
         end
     end

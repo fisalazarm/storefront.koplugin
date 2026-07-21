@@ -263,6 +263,28 @@ function StorefrontSettingsCard.show(Storefront)
             background = Blitbuffer.COLOR_DARK_GRAY,
         })
 
+        -- 3b. About Storefront Row
+        local StorefrontAboutDialog = require("storefront_about_dialog")
+        local current_ch = StorefrontAboutDialog.getChannel()
+        local ch_label = (current_ch == "beta") and _("Beta") or _("Stable")
+        local ch_widget = TextWidget:new{
+            text = ch_label,
+            face = Font:getFace("cfont", ui_font_size - 1),
+            fgcolor = storefront_theme.color_label_dim,
+        }
+        table.insert(content_vg, create_setting_row("ℹ", _("About Storefront"), ch_widget, function()
+            UIManager:close(overlay, "ui")
+            StorefrontAboutDialog.show(Storefront, function()
+                StorefrontSettingsCard.show(Storefront)
+            end)
+        end))
+
+        -- Divider line
+        table.insert(content_vg, LineWidget:new{
+            dimen = Geom:new{ w = dialog_w - sc(4), h = sc(1) },
+            background = Blitbuffer.COLOR_DARK_GRAY,
+        })
+
         -- 4. Close Button Row
         local close_text_widget = TextWidget:new{
             text = _("Close"),
