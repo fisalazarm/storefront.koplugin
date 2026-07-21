@@ -38,6 +38,27 @@ local function download(url)
     return tonumber(code), table.concat(response)
 end
 
+-- Maps a Content-Type to the file extension MuPDF's image decoders expect.
+-- Needed because plenty of image URLs carry no usable extension of their own
+-- (e.g. camo.githubusercontent.com's proxy hashes), and the URL's apparent
+-- extension can't be trusted anyway (e.g. a shields.io badge proxied through
+-- camo keeps whatever extension we guessed even though camo actually served
+-- SVG).
+local CONTENT_TYPE_EXT = {
+    ["image/png"] = "png",
+    ["image/jpeg"] = "jpg",
+    ["image/jpg"] = "jpg",
+    ["image/gif"] = "gif",
+    ["image/webp"] = "webp",
+    ["image/bmp"] = "bmp",
+}
+
+-- Downloads `url` to `dest`. Returns `ok, final_path`: `final_path` may
+-- differ from `dest` when the server's Content-Type reveals a different
+-- (correct) extension than the one we guessed from the URL. Images that
+-- turn out to be SVG (MuPDF's HTML box can't render them, whatever the
+-- extension) are rejected -- this is the only reliable way to catch SVGs
+-- served through camo, whose proxy URLs never contain ".svg".
 local function downloadImage(url, dest, max_redirects)
     max_redirects = max_redirects or 5
     if max_redirects <= 0 then return false end
@@ -53,7 +74,23 @@ local function downloadImage(url, dest, max_redirects)
     }
     code = tonumber(code)
     if code == 200 then
-        return true
+        local content_type = (headers and (headers["content-type"] or headers["Content-Type"]) or ""):lower()
+        if content_type:find("svg", 1, true) then
+            os.remove(dest)
+            return false
+        end
+        local mapped_ext = CONTENT_TYPE_EXT[content_type:match("^[^;%s]+") or ""]
+        if mapped_ext then
+            local current_ext = dest:match("%.([%w]+)$")
+            if current_ext and current_ext:lower() ~= mapped_ext then
+                local new_dest = dest:gsub("%.[%w]+$", "." .. mapped_ext)
+                os.remove(new_dest)
+                if os.rename(dest, new_dest) then
+                    return true, new_dest
+                end
+            end
+        end
+        return true, dest
     elseif (code == 301 or code == 302 or code == 303 or code == 307 or code == 308) and headers and headers.location then
         os.remove(dest)
         local new_url = headers.location
@@ -72,6 +109,20 @@ local function downloadImage(url, dest, max_redirects)
         os.remove(dest)
         return false
     end
+end
+
+-- Resolves a possibly-relative image src against the repo's default branch
+-- on raw.githubusercontent.com. GitHub's rendered README HTML leaves
+-- relative paths (e.g. "./data/screenshots/x.png") exactly as authored --
+-- it does not rewrite them to absolute URLs the way the github.com web UI
+-- does -- so left alone they'd resolve against our local cache directory
+-- instead of the repo, and MuPDF would find nothing there.
+local function resolveImageUrl(raw_url, owner, repo)
+    if raw_url:match("^https?://") or raw_url:match("^//") or raw_url:match("^data:") then
+        return raw_url
+    end
+    local rel = raw_url:gsub("^%./", ""):gsub("^/+", "")
+    return string.format("https://raw.githubusercontent.com/%s/%s/HEAD/%s", owner, repo, rel)
 end
 
 function RepoContent.stripMarkdown(text)
@@ -154,21 +205,36 @@ function RepoContent.fetchReadmeHtml(owner, repo)
         -- Decode HTML entity query parameters (&amp; -> &) for signed S3 / GitHub user asset URLs
         local url = raw_url:gsub("&amp;", "&")
 
-        -- SVG images (e.g. shields.io badges) cannot be rendered by MuPDF HTML box; strip them to prevent [image] text links
+        -- Cheap early-out for the common case (e.g. shields.io badges linked
+        -- directly); camo-proxied SVGs slip past this and are caught later
+        -- via Content-Type once downloaded, since their URLs are opaque hashes.
         local is_svg = url:lower():match("%.svg") ~= nil
         if is_svg then
             return ""
         end
 
-        local ext = url:match("%.(%w+)") or "png"
-        ext = ext:gsub("%?.*", ""):lower()
-        if #ext > 4 or ext == "" then ext = "png" end
+        -- README HTML leaves relative paths (e.g. "./data/screenshots/x.png")
+        -- unresolved -- rewrite them against the repo's default branch.
+        url = resolveImageUrl(url, owner, repo)
+
+        -- Extract the extension from the end of the path (ignoring the query
+        -- string), not the first "dot-word" in the URL -- otherwise this
+        -- matches a domain fragment (e.g. "githubusercontent" or "com" from
+        -- github.com/user-attachments/... pasted-screenshot URLs) instead of
+        -- the real file extension. downloadImage corrects this further using
+        -- the response's Content-Type once the actual bytes are known.
+        local path_only = url:match("^([^%?]+)") or url
+        local ext = path_only:match("%.([%w]+)$")
+        if not ext or ext == "" or #ext > 4 then ext = "png" end
+        ext = ext:lower()
 
         local img_filename = string.format("%s_%s_img%d.%s", safe_owner, safe_repo, image_idx, ext)
         local img_path = dir .. "/" .. img_filename
-        if downloadImage(url, img_path) then
+        local ok, final_path = downloadImage(url, img_path)
+        if ok then
             image_idx = image_idx + 1
-            return prefix .. img_filename .. suffix
+            local final_filename = (final_path or img_path):match("[^/]+$") or img_filename
+            return prefix .. final_filename .. suffix
         end
         return ""
     end)
