@@ -64,27 +64,137 @@ function StorefrontDetailsDialog:init()
     -- -----------------------------------------------------------------------
     -- 2. Title & Metadata
     -- -----------------------------------------------------------------------
+    local function getInstallRecord()
+        if self.patch then
+            return self.Storefront.getPatchRecordsMap()[self.patch.filename]
+        else
+            local repo_name_lower = (self.repo.name or ""):lower()
+            return self.Storefront.getInstallRecordsMap()[repo_name_lower]
+        end
+    end
+
     local title_text = ""
     local meta_text  = ""
     local desc_text  = ""
 
+    local owner = self.repo.owner or (self.repo.data and self.repo.data.owner and (type(self.repo.data.owner) == "string" and self.repo.data.owner or self.repo.data.owner.login)) or ""
+    local stars = tonumber(self.repo.stars) or (self.repo.data and tonumber(self.repo.data.stargazers_count)) or 0
+    local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
+
+    local ts = self.repo.pushed_at or self.repo.updated_at
+        or (self.repo.latest_release and type(self.repo.latest_release) == "table" and (self.repo.latest_release.published_at or self.repo.latest_release.created_at))
+        or (self.repo.data and (self.repo.data.pushed_at or self.repo.data.updated_at or self.repo.data.created_at))
+    local updated = (ts and type(ts) == "string") and ts:sub(1, 10) or ""
+
+    local version_str
+    if self.update_item then
+        local remote = self.update_item.remote
+        local plugin = self.update_item.plugin
+        local remote_entry = self.update_item.remote_entry
+        if remote then
+            version_str = remote.release_tag_name or remote.tag_name or remote.remote_version or remote.version
+        end
+        if not version_str and remote_entry then
+            version_str = remote_entry.sha and ("sha:" .. remote_entry.sha:sub(1, 7)) or remote_entry.version
+        end
+        if not version_str and plugin then
+            version_str = plugin.version
+        end
+    end
+    if not version_str and self.patch then
+        version_str = self.patch.sha and ("sha:" .. self.patch.sha:sub(1, 7)) or self.patch.version
+    end
+    if not version_str then
+        version_str = self.repo.latest_version or self.repo.version or self.repo.tag_name or self.repo.release_tag
+    end
+    if not version_str and self.repo.latest_release and type(self.repo.latest_release) == "table" then
+        version_str = self.repo.latest_release.tag_name or self.repo.latest_release.release_tag_name or self.repo.latest_release.name or self.repo.latest_release.version
+    end
+    if not version_str and self.repo.data then
+        if type(self.repo.data.latest_release) == "table" then
+            version_str = self.repo.data.latest_release.tag_name or self.repo.data.latest_release.release_tag_name or self.repo.data.latest_release.name or self.repo.data.latest_release.version
+        end
+        if not version_str then
+            version_str = self.repo.data.tag_name or self.repo.data.latest_version or self.repo.data.version
+        end
+    end
+
+    local rec = getInstallRecord()
+    if not version_str and rec then
+        version_str = rec.version or rec.tag_name or rec.release_tag_name or (rec.sha and ("sha:" .. rec.sha:sub(1, 7)))
+    end
+
+    if not version_str and self.Storefront then
+        if not self.patch and self.Storefront.listInstalledPlugins then
+            local installed_plugins = self.Storefront:listInstalledPlugins()
+            for _, p in ipairs(installed_plugins or {}) do
+                local clean_p = p.dirname:gsub("%.koplugin$", ""):lower()
+                local clean_repo = (self.repo.name or ""):gsub("%.koplugin$", ""):lower()
+                if clean_p == clean_repo or p.dirname:lower() == (self.repo.name or ""):lower() then
+                    if p.version then
+                        version_str = p.version
+                        break
+                    end
+                end
+            end
+        elseif self.patch and self.Storefront.listInstalledPatches then
+            local installed_patches = self.Storefront:listInstalledPatches()
+            for _, p in ipairs(installed_patches or {}) do
+                if p.filename == self.patch.filename then
+                    if p.sha then
+                        version_str = "sha:" .. p.sha:sub(1, 7)
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    if version_str and type(version_str) == "string" and version_str ~= "" then
+        if version_str:find("^sha:") then
+            -- keep sha:xxxxxxx format
+        else
+            version_str = version_str:gsub("^[vV]", "")
+            if version_str ~= "" then
+                version_str = "v" .. version_str
+            else
+                version_str = nil
+            end
+        end
+    else
+        version_str = nil
+    end
+
     if self.patch then
         title_text = self.patch.filename or _("Patch")
         local repo_name = self.repo.full_name or self.repo.name or ""
-        meta_text  = string.format("%s  ·  branch %s", repo_name, self.patch.branch or "HEAD")
-        desc_text  = self.patch.display_path or ""
+        local meta_parts = {}
+        if repo_name ~= "" then table.insert(meta_parts, repo_name) end
+        if stars > 0 then table.insert(meta_parts, "★ " .. stars_fmt) end
+        if updated ~= "" and version_str then
+            table.insert(meta_parts, string.format("updated %s (%s)", updated, version_str))
+        elseif updated ~= "" then
+            table.insert(meta_parts, "updated " .. updated)
+        elseif version_str then
+            table.insert(meta_parts, version_str)
+        end
+        if self.patch.branch then
+            table.insert(meta_parts, "branch " .. self.patch.branch)
+        end
+        meta_text = table.concat(meta_parts, "  ·  ")
+        desc_text = self.patch.display_path or ""
     else
         title_text = self.repo.name or self.repo.full_name or _("Repository")
-        local owner  = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login) or ""
-        local stars  = tonumber(self.repo.stars) or (self.repo.data and tonumber(self.repo.data.stargazers_count)) or 0
-        local stars_fmt = stars >= 1000 and string.format("%.1fk", stars / 1000):gsub("%.0k", "k") or tostring(stars)
-        local ts     = self.repo.data and (self.repo.data.pushed_at or self.repo.data.updated_at or self.repo.data.created_at)
-        local updated = (ts and type(ts) == "string") and ts:sub(1, 10) or ""
-
         local meta_parts = {}
-        if owner   ~= "" then table.insert(meta_parts, owner) end
+        if owner ~= "" then table.insert(meta_parts, owner) end
         table.insert(meta_parts, "★ " .. stars_fmt)
-        if updated ~= "" then table.insert(meta_parts, "updated " .. updated) end
+        if updated ~= "" and version_str then
+            table.insert(meta_parts, string.format("updated %s (%s)", updated, version_str))
+        elseif updated ~= "" then
+            table.insert(meta_parts, "updated " .. updated)
+        elseif version_str then
+            table.insert(meta_parts, version_str)
+        end
         meta_text = table.concat(meta_parts, "  ·  ")
         desc_text = self.repo.description or ""
     end
@@ -118,12 +228,26 @@ function StorefrontDetailsDialog:init()
         local patch_map = self.Storefront.getPatchRecordsMap()
         is_installed = patch_map[self.patch.filename] ~= nil
     else
-        local install_map = self.Storefront.getInstallRecordsMap()
-        local repo_name_lower = (self.repo.name or ""):lower()
-        is_installed = install_map[repo_name_lower] ~= nil
+        local installed_lookup = self.Storefront:getInstalledLookup()
+        if installed_lookup then
+            if self.repo.full_name and installed_lookup[self.repo.full_name:lower()] then
+                is_installed = true
+            elseif self.repo.id and installed_lookup["id:" .. tostring(self.repo.id)] then
+                is_installed = true
+            elseif self.repo.name and installed_lookup[self.repo.name:lower()] then
+                is_installed = true
+            end
+        end
+        if not is_installed then
+            local install_map = self.Storefront.getInstallRecordsMap()
+            local repo_name_lower = (self.repo.name or ""):lower()
+            is_installed = install_map[repo_name_lower] ~= nil
+        end
     end
 
-    if self.kind == "update" or (self.update_item and self.update_item.needs_update) then
+    if self.update_item and self.update_item.needs_update ~= nil then
+        has_update = (self.update_item.needs_update == true)
+    elseif self.kind == "update" then
         has_update = true
     end
 

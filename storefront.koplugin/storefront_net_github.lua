@@ -328,7 +328,7 @@ function GitHubClient.fetchCompareCommits(owner, repo, base, head)
     return parsed, nil
 end
 
-local function markdownToHtml(md)
+local function markdownToHtml(md, owner, repo)
     if not md or md == "" then
         return "<div class=\"markdown-body\"><p>No README content.</p></div>"
     end
@@ -352,6 +352,30 @@ local function markdownToHtml(md)
             table.insert(lines, escaped)
         else
             local processed = line:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+
+            -- Convert Markdown Images: ![alt](url) -> <img src="url" alt="alt"/>
+            processed = processed:gsub("!%[([^%]]*)%]%(([^%)]+)%)", function(alt, src)
+                if owner and repo and not src:find("^https?://") and not src:find("^data:") then
+                    local clean_src = src:gsub("^%./", "")
+                    src = string.format("https://raw.githubusercontent.com/%s/%s/HEAD/%s", owner, repo, clean_src)
+                end
+                return string.format('<img src="%s" alt="%s"/>', src, alt)
+            end)
+
+            -- Restore/convert raw HTML img tags that got escaped by &lt;img ... &gt;
+            processed = processed:gsub("&lt;img%s+(.-)/?&gt;", function(attrs)
+                local unescaped_attrs = attrs:gsub("&quot;", '"'):gsub("&amp;", "&")
+                if owner and repo then
+                    unescaped_attrs = unescaped_attrs:gsub('src=["\']([^"\']+)["\']', function(src)
+                        if not src:find("^https?://") and not src:find("^data:") then
+                            local clean_src = src:gsub("^%./", "")
+                            src = string.format("https://raw.githubusercontent.com/%s/%s/HEAD/%s", owner, repo, clean_src)
+                        end
+                        return string.format('src="%s"', src)
+                    end)
+                end
+                return string.format('<img %s/>', unescaped_attrs)
+            end)
 
             -- Inline formatting
             processed = processed:gsub("%[([^%]]+)%]%(([^%)]+)%)", '<a href="%2">%1</a>')
@@ -447,6 +471,17 @@ function GitHubClient.fetchReadmeHtml(owner, repo)
     }
     local body = table.concat(response_body)
     if tonumber(code) == 200 and body ~= "" then
+        body = body:gsub('src=["\']([^"\']+)["\']', function(src)
+            if not src:find("^https?://") and not src:find("^data:") and owner and repo then
+                local clean_src = src:gsub("^%./", "")
+                if clean_src:find("^blob/") or clean_src:find("^raw/") then
+                    return string.format('src="https://raw.githubusercontent.com/%s/%s/%s"', owner, repo, clean_src:gsub("^blob/", ""):gsub("^raw/", ""))
+                else
+                    return string.format('src="https://raw.githubusercontent.com/%s/%s/HEAD/%s"', owner, repo, clean_src)
+                end
+            end
+            return string.format('src="%s"', src)
+        end)
         return body, nil
     end
 
@@ -462,12 +497,10 @@ function GitHubClient.fetchReadmeHtml(owner, repo)
     }
     local raw_body = table.concat(raw_response)
     if tonumber(raw_code) == 200 and raw_body ~= "" then
-        return markdownToHtml(raw_body), nil
+        return markdownToHtml(raw_body, owner, repo), nil
     end
 
     return nil, string.format("HTTP %s", tostring(code))
 end
 
 return GitHubClient
-
-

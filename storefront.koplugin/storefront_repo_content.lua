@@ -208,14 +208,36 @@ function RepoContent.fetchReadmeHtml(owner, repo)
     body = body:gsub("(<img[^>]+)%s+height=[\"'][^\"']*[\"']", "%1")
     body = body:gsub("(<img[^>]+style=[\"'][^\"']*)width:%s*[^;\"]+;?", "%1")
 
-    -- Clean up inline images without blocking synchronous downloads
+    -- Download inline images locally for MuPDF HTML viewer widget
     body = body:gsub('(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)', function(prefix, raw_url, suffix)
         local url = raw_url:gsub("&amp;", "&")
         if url:lower():match("%.svg") ~= nil then
             return ""
         end
         url = resolveImageUrl(url, owner, repo)
-        return prefix .. url .. suffix
+
+        local clean_url = url:gsub("[^%w]", "_")
+        if #clean_url > 40 then
+            clean_url = clean_url:sub(-40)
+        end
+        local ext = url:match("%.([%w]+)$") or "png"
+        ext = ext:lower()
+        if ext == "svg" then return "" end
+
+        local img_filename = string.format("%s_%s_img_%s.%s", safe_owner, safe_repo, clean_url, ext)
+        local img_dest = dir .. "/" .. img_filename
+
+        if lfs.attributes(img_dest, "mode") == "file" then
+            return prefix .. img_filename .. suffix
+        end
+
+        local ok_img, final_path = downloadImage(url, img_dest)
+        if ok_img and final_path then
+            local final_filename = final_path:match("[^/]+$") or img_filename
+            return prefix .. final_filename .. suffix
+        end
+
+        return ""
     end)
 
     local ok, write_err = util.writeToFile(body, path)

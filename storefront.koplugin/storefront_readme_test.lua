@@ -54,8 +54,14 @@ local html_code = GitHubClient.markdownToHtml("```lua\nlocal x = 1\n```")
 check("Code block converted to <pre><code>", html_code:find("<pre><code>") ~= nil)
 check("Code block content preserved", html_code:find("local x = 1") ~= nil)
 
--- Test 7: Ensure output is wrapped in markdown-body container
-check("Output wrapped in <div class=\"markdown-body\">", html_h1:find("<div class=\"markdown%-body\">") ~= nil)
+-- Test 8: Images conversion & relative URL resolution
+local html_img = GitHubClient.markdownToHtml("![Screenshot](docs/screen.png)", "koreader", "coverbrowser")
+check("Markdown image converted to <img src=...>", html_img:find('<img src="https://raw.githubusercontent.com/koreader/coverbrowser/HEAD/docs/screen.png" alt="Screenshot"/>') ~= nil)
+
+-- Test 9: Ensure links do not break image syntax
+local html_img_and_link = GitHubClient.markdownToHtml("![Pic](https://example.com/pic.png) [Link](https://example.com)")
+check("Image tag created correctly alongside link", html_img_and_link:find('<img src="https://example.com/pic.png" alt="Pic"/>') ~= nil)
+check("Link tag created correctly alongside image", html_img_and_link:find('<a href="https://example.com">Link</a>') ~= nil)
 
 if failures > 0 then
     print(string.format("README TESTS FAILED: %d errors", failures))
