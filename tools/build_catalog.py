@@ -31,7 +31,14 @@ PATCH_QUERIES = [
     'in:name "koreader-user-patches"',
 ]
 
+rate_limit_errors = 0
+MAX_RATE_LIMIT_ERRORS = 3
+
 def make_request(url):
+    global rate_limit_errors
+    if rate_limit_errors >= MAX_RATE_LIMIT_ERRORS:
+        return None
+        
     req = urllib.request.Request(url)
     req.add_header("User-Agent", USER_AGENT)
     req.add_header("Accept", "application/vnd.github+json")
@@ -41,10 +48,15 @@ def make_request(url):
     try:
         with urllib.request.urlopen(req) as resp:
             data = resp.read().decode("utf-8")
+            rate_limit_errors = 0  # reset on success
             return json.loads(data)
     except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            rate_limit_errors += 1
+            if rate_limit_errors >= MAX_RATE_LIMIT_ERRORS:
+                print(f"Rate limit reached ({e.code}). Skipping further API calls in this run.", file=sys.stderr)
+            return None
         if e.code == 401 and GITHUB_TOKEN:
-            # Token might be invalid locally; retry once without token
             req2 = urllib.request.Request(url)
             req2.add_header("User-Agent", USER_AGENT)
             req2.add_header("Accept", "application/vnd.github+json")
@@ -53,7 +65,9 @@ def make_request(url):
                     return json.loads(resp.read().decode("utf-8"))
             except Exception:
                 return None
-        if e.code != 404: # 404 is expected for repos without releases
+        if e.code in (404, 409):
+            return None
+        if e.code != 404 and e.code != 409:
             print(f"HTTP Error {e.code} for {url}: {e.reason}", file=sys.stderr)
         return None
     except Exception as e:
@@ -62,20 +76,19 @@ def make_request(url):
 
 def search_repositories(base_query):
     all_items = []
-    # GitHub search excludes forks by default unless fork:only is specified.
-    # Search both non-fork and fork repositories.
+    # Search non-forks (up to 3 pages / 300 repos) and forks (up to 2 pages / 200 repos)
     sub_queries = [
-        base_query,
-        base_query + " fork:only",
+        (base_query, 3),
+        (base_query + " fork:only", 2),
     ]
     
-    for q in sub_queries:
+    for q, max_pages in sub_queries:
         page = 1
         per_page = 100
-        while page <= 10:  # GitHub API limit: 1,000 max results per query (10 pages of 100)
+        while page <= max_pages:
             encoded_q = urllib.parse.quote(q)
             url = f"{BASE_URL}/search/repositories?q={encoded_q}&sort=stars&order=desc&per_page={per_page}&page={page}"
-            print(f"Searching GitHub (page {page}): {q}")
+            print(f"Searching GitHub (page {page}/{max_pages}): {q}")
             res = make_request(url)
             if not res or "items" not in res:
                 break
@@ -86,7 +99,6 @@ def search_repositories(base_query):
             if len(items) < per_page:
                 break
             page += 1
-            time.sleep(0.1)
             
     return all_items
 
@@ -130,6 +142,8 @@ def process_repos(queries, is_patch=False):
         repo_name = repo.get("name", "")
         full_name = repo.get("full_name", f"{owner}/{repo_name}")
         default_branch = repo.get("default_branch", "main")
+        stars = repo.get("stargazers_count", 0)
+        is_fork = repo.get("fork", False)
         
         print(f"Processing repo: {full_name}")
         
@@ -141,9 +155,9 @@ def process_repos(queries, is_patch=False):
             "owner": owner,
             "full_name": full_name,
             "description": repo.get("description") or "",
-            "stars": repo.get("stargazers_count", 0),
-            "stargazers_count": repo.get("stargazers_count", 0),
-            "fork": repo.get("fork", False),
+            "stars": stars,
+            "stargazers_count": stars,
+            "fork": is_fork,
             "language": repo.get("language") or "",
             "homepage": repo.get("homepage") or "",
             "default_branch": default_branch,
@@ -152,34 +166,35 @@ def process_repos(queries, is_patch=False):
             "html_url": repo.get("html_url") or f"https://github.com/{full_name}",
         }
         
-        # Check latest release
-        rel = get_latest_release(owner, repo_name)
-        if rel and type(rel) == dict and "tag_name" in rel:
-            tag_name = rel.get("tag_name", "")
-            assets = rel.get("assets", [])
-            download_url = None
-            for asset in assets:
-                asset_name = asset.get("name", "")
-                if asset_name.endswith(".zip"):
-                    download_url = asset.get("browser_download_url")
-                    break
-            if not download_url and "zipball_url" in rel:
-                download_url = rel.get("zipball_url")
-                
-            record["latest_release"] = {
-                "tag_name": tag_name,
-                "published_at": rel.get("published_at") or "",
-                "download_url": download_url,
-                "name": rel.get("name") or "",
-            }
+        # Fetch latest release only for non-forks or starred forks (0-star forks rarely have releases)
+        if not is_fork or stars > 0:
+            rel = get_latest_release(owner, repo_name)
+            if rel and type(rel) == dict and "tag_name" in rel:
+                tag_name = rel.get("tag_name", "")
+                assets = rel.get("assets", [])
+                download_url = None
+                for asset in assets:
+                    asset_name = asset.get("name", "")
+                    if asset_name.endswith(".zip"):
+                        download_url = asset.get("browser_download_url")
+                        break
+                if not download_url and "zipball_url" in rel:
+                    download_url = rel.get("zipball_url")
+                    
+                record["latest_release"] = {
+                    "tag_name": tag_name,
+                    "published_at": rel.get("published_at") or "",
+                    "download_url": download_url,
+                    "name": rel.get("name") or "",
+                }
         
-        if is_patch:
-            print(f"Fetching patch tree for {full_name}...")
+        if is_patch and (not is_fork or stars > 0):
             patch_files = fetch_patch_files(owner, repo_name, default_branch)
             record["patch_files"] = patch_files
             
         processed.append(record)
-        time.sleep(0.2) # Friendly rate spacing
+        
+    return processed
         
     return processed
 
