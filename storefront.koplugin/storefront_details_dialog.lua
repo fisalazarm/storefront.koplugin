@@ -427,6 +427,21 @@ img { max-width: 100%%; height: auto; display: block; margin-left: auto; margin-
 ul, ol { padding-left: 1.3em !important; margin-left: 0 !important; }
 li { margin-left: 0 !important; padding-left: 0.1em !important; }
 li > ul, li > ol { padding-left: 1.1em !important; }
+body, .markdown-body, div, p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, a {
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+    max-width: 100%% !important;
+}
+pre, code {
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+    max-width: 100%% !important;
+}
+table { width: 100%% !important; table-layout: fixed !important; }
+td, th { word-break: break-word !important; }
 ]=], font_declarations, sans_family, sans_family, serif_family)
 
     local html_box = HtmlBoxWidget:new{
