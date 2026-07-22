@@ -194,7 +194,24 @@ function RepoContent.fetchReadmeHtml(owner, repo)
 
     -- 1. Check disk cache first for instant opening
     if lfs.attributes(path, "mode") == "file" then
-        return true, path
+        local cached_content = util.readFromFile(path)
+        if cached_content and cached_content ~= "" then
+            if cached_content:find("<img") then
+                cached_content = cached_content:gsub("(<img[^>]+style=[\"'][^\"']*[%s\"';])width:%s*[^;\"]+;?", "%1")
+                if not cached_content:find("storefront%-img:") then
+                    cached_content = cached_content:gsub('(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)', function(prefix, filename, suffix)
+                        local full_img_path = dir .. "/" .. filename
+                        if lfs.attributes(full_img_path, "mode") == "file" then
+                            return string.format('<a href="storefront-img:%s">%s%s%s</a>', full_img_path, prefix, filename, suffix)
+                        end
+                        return prefix .. filename .. suffix
+                    end)
+                end
+                cached_content = cached_content:gsub('<a[^>]+href=["\'][^"\']+["\'][^>]*>%s*(<a%s+href=["\']storefront%-img:[^"\']+["\'][^>]*>.-</a>)%s*</a>', "%1")
+                util.writeToFile(cached_content, path)
+            end
+            return true, path
+        end
     end
 
     -- 2. Fetch HTML content
@@ -206,7 +223,7 @@ function RepoContent.fetchReadmeHtml(owner, repo)
     -- Strip explicit width and height attributes so images expand to full width
     body = body:gsub("(<img[^>]+)%s+width=[\"'][^\"']*[\"']", "%1")
     body = body:gsub("(<img[^>]+)%s+height=[\"'][^\"']*[\"']", "%1")
-    body = body:gsub("(<img[^>]+style=[\"'][^\"']*)width:%s*[^;\"]+;?", "%1")
+    body = body:gsub("(<img[^>]+style=[\"'][^\"']*[%s\"';])width:%s*[^;\"]+;?", "%1")
 
     -- Download inline images locally for MuPDF HTML viewer widget
     body = body:gsub('(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)', function(prefix, raw_url, suffix)
@@ -228,17 +245,22 @@ function RepoContent.fetchReadmeHtml(owner, repo)
         local img_dest = dir .. "/" .. img_filename
 
         if lfs.attributes(img_dest, "mode") == "file" then
-            return prefix .. img_filename .. suffix
+            local img_html = prefix .. img_filename .. suffix
+            return string.format('<a href="storefront-img:%s">%s</a>', img_dest, img_html)
         end
 
         local ok_img, final_path = downloadImage(url, img_dest)
         if ok_img and final_path then
             local final_filename = final_path:match("[^/]+$") or img_filename
-            return prefix .. final_filename .. suffix
+            local img_html = prefix .. final_filename .. suffix
+            return string.format('<a href="storefront-img:%s">%s</a>', final_path, img_html)
         end
 
         return ""
     end)
+
+    -- Clean up double-nested <a> tags so storefront-img links take precedence
+    body = body:gsub('<a[^>]+href=["\'][^"\']+["\'][^>]*>%s*(<a%s+href=["\']storefront%-img:[^"\']+["\'][^>]*>.-</a>)%s*</a>', "%1")
 
     local ok, write_err = util.writeToFile(body, path)
     if not ok then

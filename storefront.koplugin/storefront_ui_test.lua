@@ -31,6 +31,9 @@ local dummy_widget = {
     getSize = function() return { w = 100, h = 50 } end,
     enableDisable = function() end,
     isFocusable = function() return true end,
+    open = function(self) return self or dummy_widget end,
+    readSetting = function() end,
+    saveSetting = function() end,
     copy = function(self)
         local c = {}
         for k, v in pairs(self) do c[k] = v end
@@ -68,6 +71,7 @@ local widgets = {
     "ui/widget/scrolltextwidget",
     "ui/widget/infomessage",
     "ui/widget/imagewidget",
+    "ui/widget/imageviewer",
     "ui/geometry",
     "ui/gesturerange",
     "ui/widget/htmlboxwidget",
@@ -89,6 +93,7 @@ local widgets = {
     "ffi/sha2",
     "socketutil",
     "socket",
+    "luasettings",
 }
 
 package.loaded["logger"] = {
@@ -96,6 +101,8 @@ package.loaded["logger"] = {
     warn = function() end,
     dbg = function() end,
     err = function() end,
+    setLevel = function() end,
+    levels = { DBG = 1, INFO = 2, WARN = 3, ERR = 4 },
 }
 
 package.loaded["storefront_logger"] = {
@@ -119,6 +126,8 @@ package.loaded["storefront_net_github"] = {
 package.loaded["storefront_updates_ui"] = {
     init = function() end,
 }
+
+package.loaded["luasettings"] = dummy_widget
 
 for _, w in ipairs(widgets) do
     if w ~= "storefront_plugin_paths" and w ~= "libs/libkoreader-lfs" then
@@ -372,6 +381,15 @@ if ok_browser then
         package.loaded["storefront_cache"].listRepos = orig_list
         local rec = MainStorefront:getInstalledLookup()
         check("Installed plugin simpleui resolved successfully", rec ~= nil, true)
+
+        -- Test StorefrontImageModal loading and onClose execution
+        local StorefrontImageModal = require("storefront_image_modal")
+        local modal = StorefrontImageModal:new{
+            image_path = "/tmp/test.png",
+            title = "Test Image Modal",
+        }
+        check("StorefrontImageModal loaded and instantiated", modal ~= nil, true)
+        check("StorefrontImageModal onClose executes without error", modal:onClose(), true)
     end
 end
 

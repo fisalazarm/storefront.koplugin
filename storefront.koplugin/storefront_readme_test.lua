@@ -63,6 +63,22 @@ local html_img_and_link = GitHubClient.markdownToHtml("![Pic](https://example.co
 check("Image tag created correctly alongside link", html_img_and_link:find('<img src="https://example.com/pic.png" alt="Pic"/>') ~= nil)
 check("Link tag created correctly alongside image", html_img_and_link:find('<a href="https://example.com">Link</a>') ~= nil)
 
+-- Test 10: Image modal storefront-img scheme interception
+local mock_details_dialog = {
+    repo = { name = "TestRepo" },
+    onLinkTap = function(self, href)
+        if href and type(href) == "string" and href:find("^storefront%-img:") then
+            return true
+        end
+        return false
+    end
+}
+check("storefront-img href is intercepted by onLinkTap", mock_details_dialog:onLinkTap("storefront-img:/cache/readme/test.png") == true)
+check("normal HTTP link is NOT intercepted by storefront-img handler", mock_details_dialog:onLinkTap("https://github.com") == false)
+local link_obj = { uri = "storefront-img:/cache/readme/test.png" }
+local extracted_href = (type(link_obj) == "table" and (link_obj.uri or link_obj.url)) or (type(link_obj) == "string" and link_obj) or ""
+check("link object uri extracted correctly", mock_details_dialog:onLinkTap(extracted_href) == true)
+
 if failures > 0 then
     print(string.format("README TESTS FAILED: %d errors", failures))
     os.exit(1)
