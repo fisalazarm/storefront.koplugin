@@ -100,7 +100,13 @@ package.loaded["logger"] = {
 
 package.loaded["storefront_logger"] = {
     log = function() end,
+    info = function() end,
+    action = function() end,
+    warn = function() end,
+    err = function() end,
     clear = function() end,
+    reset = function() end,
+    startSession = function() end,
 }
 
 package.loaded["storefront_net_github"] = {
@@ -331,8 +337,13 @@ if ok_browser then
         local MainStorefront = require("main")
         MainStorefront._installed_lookup_cache = nil
         local lookup = MainStorefront:getInstalledLookup()
-        check("Installed lookup matches directory simpleui.koplugin", lookup["simpleui.koplugin"] == true, true)
-        check("Installed lookup matches base directory simpleui", lookup["simpleui"] == true, true)
+        check("Installed lookup matches exact repo full_name", lookup["doctorhetfield-cmd/simpleui.koplugin"] == true, true)
+        
+        -- Test that direct match repo shows installed, but sibling repo with same name does not
+        local direct_repo_item = MainStorefront:makeRepoMenuItem({ name = "simpleui.koplugin", full_name = "doctorhetfield-cmd/simpleui.koplugin" }, lookup)
+        local sibling_repo_item = MainStorefront:makeRepoMenuItem({ name = "simpleui.koplugin", full_name = "yanyan-alien/simpleui.koplugin" }, lookup)
+        check("Direct match repo item is marked installed", direct_repo_item.installed, true)
+        check("Sibling repo with same name is NOT marked installed", sibling_repo_item.installed, false)
 
         local test_fork_0_stars = { name = "test-fork", fork = true, stars = 0 }
         local test_repo_stars = { name = "test-repo", fork = false, stars = 10 }

@@ -199,6 +199,27 @@ function StorefrontDetailsDialog:init()
         desc_text = self.repo.description or ""
     end
 
+    local folder_pill_widget = nil
+    if self.update_item and self.update_item.plugin and self.update_item.plugin.dirname then
+        if self.update_item.plugin.dirname ~= self.repo.name then
+            local folder_name = self.update_item.plugin.dirname
+            local folder_text = TextWidget:new{
+                text = string.format("folder: %s", folder_name),
+                face = Font:getFace("cfont", 14),
+                bold = true,
+                fgcolor = Blitbuffer.COLOR_WHITE,
+            }
+            folder_pill_widget = FrameContainer:new{
+                background = Blitbuffer.COLOR_DARK_GRAY,
+                bordersize = 0,
+                radius = sc(4),
+                padding = sc(4),
+                padding_h = sc(14),
+                folder_text,
+            }
+        end
+    end
+
     local title_label = TextWidget:new{
         text = title_text,
         face = Font:getFace("NotoSerif-Regular.ttf", 28),
@@ -230,18 +251,25 @@ function StorefrontDetailsDialog:init()
     else
         local installed_lookup = self.Storefront:getInstalledLookup()
         if installed_lookup then
-            if self.repo.full_name and installed_lookup[self.repo.full_name:lower()] then
+            if self.repo.full_name and (installed_lookup[self.repo.full_name] or installed_lookup[self.repo.full_name:lower()]) then
                 is_installed = true
             elseif self.repo.id and installed_lookup["id:" .. tostring(self.repo.id)] then
                 is_installed = true
-            elseif self.repo.name and installed_lookup[self.repo.name:lower()] then
-                is_installed = true
+            elseif installed_lookup.unmatched and self.repo.name then
+                local low_name = self.repo.name:lower()
+                local base_name = low_name:gsub("%.koplugin$", "")
+                if installed_lookup.unmatched[low_name] or installed_lookup.unmatched[base_name] then
+                    is_installed = true
+                end
             end
         end
         if not is_installed then
             local install_map = self.Storefront.getInstallRecordsMap()
             local repo_name_lower = (self.repo.name or ""):lower()
-            is_installed = install_map[repo_name_lower] ~= nil
+            local rec = install_map[repo_name_lower] or install_map[self.repo.name]
+            if rec and not (rec.owner or rec.repo_full_name or rec.repo_id) then
+                is_installed = true
+            end
         end
     end
 
@@ -258,19 +286,39 @@ function StorefrontDetailsDialog:init()
     local function getInstallRecord()
         if self.patch then
             return self.Storefront.getPatchRecordsMap()[self.patch.filename]
+        elseif self.update_item and self.update_item.record then
+            return self.update_item.record
         else
+            local records = self.Storefront.getInstallRecordsMap()
             local repo_name_lower = (self.repo.name or ""):lower()
-            return self.Storefront.getInstallRecordsMap()[repo_name_lower]
+            if records[repo_name_lower] then
+                return records[repo_name_lower]
+            end
+            local owner = self.repo.owner or (self.repo.data and self.repo.data.owner and self.repo.data.owner.login)
+            for dirname, rec in pairs(records) do
+                if rec and rec.repo and rec.repo:lower() == repo_name_lower and (not owner or (rec.owner and rec.owner:lower() == owner:lower())) then
+                    rec.dirname = dirname
+                    return rec
+                end
+            end
+            return nil
         end
     end
 
     local function doRemove()
         self:onClose()
-        local record = getInstallRecord()
         if self.patch then
-            self.Storefront:deletePatch(self.patch.filename, record)
+            local record = (self.update_item and self.update_item.record) or getInstallRecord()
+            local filename = self.patch.filename
+            self.Storefront:deletePatch(filename, record)
         else
-            local dirname = record and record.dirname or self.repo.name
+            local record = (self.update_item and self.update_item.record) or getInstallRecord()
+            local dirname
+            if self.update_item and self.update_item.plugin and self.update_item.plugin.dirname then
+                dirname = self.update_item.plugin.dirname
+            else
+                dirname = (record and record.dirname) or self.repo.name
+            end
             self.Storefront:deletePlugin(dirname, record)
         end
     end
@@ -373,6 +421,7 @@ function StorefrontDetailsDialog:init()
                    + title_label:getSize().h
                    + sc(4)
                    + meta_label:getSize().h
+                   + (folder_pill_widget and (sc(6) + folder_pill_widget:getSize().h) or 0)
                    + sc(12)
                    + desc_label:getSize().h
                    + sc(16)
@@ -582,7 +631,7 @@ td, th { word-break: break-word !important; }
     -- -----------------------------------------------------------------------
     -- 7. Full-screen layout
     -- -----------------------------------------------------------------------
-    local content_group = VerticalGroup:new{
+    local content_group_items = {
         align = "left",
         back_btn,
         VerticalSpan:new{ width = sc(8) },
@@ -591,17 +640,25 @@ td, th { word-break: break-word !important; }
         title_label,
         VerticalSpan:new{ width = sc(4) },
         meta_label,
-        VerticalSpan:new{ width = sc(12) },
-        desc_label,
-        VerticalSpan:new{ width = sc(16) },
-        main_action_btn,
-        VerticalSpan:new{ width = sc(16) },
-        LineWidget:new{ background = Blitbuffer.COLOR_DARK_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } },
-        VerticalSpan:new{ width = sc(12) },
-        html_box,
-        VerticalSpan:new{ width = sc(12) },
-        pagination_bar,
     }
+
+    if folder_pill_widget then
+        table.insert(content_group_items, VerticalSpan:new{ width = sc(6) })
+        table.insert(content_group_items, folder_pill_widget)
+    end
+
+    table.insert(content_group_items, VerticalSpan:new{ width = sc(12) })
+    table.insert(content_group_items, desc_label)
+    table.insert(content_group_items, VerticalSpan:new{ width = sc(16) })
+    table.insert(content_group_items, main_action_btn)
+    table.insert(content_group_items, VerticalSpan:new{ width = sc(16) })
+    table.insert(content_group_items, LineWidget:new{ background = Blitbuffer.COLOR_DARK_GRAY, dimen = Geom:new{ w = self.screen_w - sc(24), h = Size.line.thin } })
+    table.insert(content_group_items, VerticalSpan:new{ width = sc(12) })
+    table.insert(content_group_items, html_box)
+    table.insert(content_group_items, VerticalSpan:new{ width = sc(12) })
+    table.insert(content_group_items, pagination_bar)
+
+    local content_group = VerticalGroup:new(content_group_items)
 
     self[1] = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
