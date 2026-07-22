@@ -1221,12 +1221,25 @@ local function extractAuthorFromPlugin(plugin)
         
         local url = meta.url or meta.homepage or meta.repository or meta.repo or meta.fullname
         if url and type(url) == "string" then
-            local owner = url:match("github%.com/([^/]+)")
+            local owner = url:match("github%.com[:/]([^/]+)")
             if owner then return owner end
         end
     end
     
     if plugin.path then
+        local meta_path = plugin.path .. "/_meta.lua"
+        local mf = io.open(meta_path, "r")
+        if mf then
+            local mcontent = mf:read("*a")
+            mf:close()
+            if mcontent then
+                local owner = mcontent:match("github%.com[:/]([^/\"']+)")
+                if owner then return owner end
+                local author = mcontent:match("author%s*=%s*[\"']([^\"']+)[\"']") or mcontent:match("owner%s*=%s*[\"']([^\"']+)[\"']")
+                if author and author ~= "" then return author end
+            end
+        end
+
         local git_cfg_path = plugin.path .. "/.git/config"
         local f = io.open(git_cfg_path, "r")
         if f then
@@ -1248,6 +1261,7 @@ function Storefront:autoMatchInstalled()
         return
     end
     self._auto_matched_gen = current_gen
+    StorefrontLogger.info("AUTO-MATCH starting for installed plugins and patches")
 
     -- 1. Plugins
     local records = getInstallRecordsMap()
@@ -2911,6 +2925,7 @@ function Storefront:matchPluginWithRepo(plugin, repo)
     if not plugin or not repo then
         return
     end
+    StorefrontLogger.action(string.format("MATCH plugin: %s matched with repo %s", tostring(plugin.dirname), tostring(repo.full_name or repo.name)))
     local record = buildInstallRecordFields(
         plugin.dirname,
         plugin.name,
@@ -3957,6 +3972,9 @@ function Storefront:_checkSinglePluginInternal(record)
 end
 
 function Storefront:updatePluginFromRecord(record)
+    if record then
+        StorefrontLogger.action(string.format("UPDATE plugin starting: dirname=%s (repo=%s/%s, version=%s)", tostring(record.dirname), tostring(record.owner), tostring(record.repo), tostring(record.installed_version)))
+    end
     local descriptor = buildRepoDescriptorFromRecord(record)
     if not descriptor then
         UIManager:show(InfoMessage:new{ text = _("Missing repository info for update."), timeout = 4 })
@@ -3975,6 +3993,9 @@ function Storefront:updatePluginFromRecord(record)
 end
 
 function Storefront:updatePatchFromRecord(record)
+    if record then
+        StorefrontLogger.action(string.format("UPDATE patch starting: filename=%s (repo=%s/%s)", tostring(record.filename), tostring(record.owner), tostring(record.repo)))
+    end
     if not record or not record.owner or not record.repo or not record.path then
         UIManager:show(InfoMessage:new{ text = _("Missing repository info for patch update."), timeout = 4 })
         return
@@ -4052,6 +4073,7 @@ function Storefront:matchPatchWithRepo(patch, repo, patch_entry)
     if not patch or not repo or not patch_entry then
         return
     end
+    StorefrontLogger.action(string.format("MATCH patch: %s matched with repo %s", tostring(patch.filename), tostring(repo.full_name or repo.name)))
     local from_patch_updates = self.match_context
         and self.match_context.kind == "patch"
         and self.match_context.from_patch_updates
@@ -4577,6 +4599,7 @@ function Storefront:_installPatchFromRepoInternal(repo, patch)
         return
     end
     local url = patch.download_url or buildPatchDownloadUrl(owner, repo.name, patch.branch or "HEAD", patch.path)
+    StorefrontLogger.action(string.format("INSTALL patch starting: filename=%s (repo=%s/%s, url=%s)", tostring(patch and patch.filename), tostring(owner), tostring(repo.name), tostring(url)))
     if not url then
         UIManager:show(InfoMessage:new{ text = _("Unable to determine patch download URL."), timeout = 4 })
         return
@@ -4906,15 +4929,17 @@ local function buildDownloadOptionsTitle(release, owner, repo_name)
     else
         label = getReleaseLabel(release)
     end
-    if not label then
-        return _("Download options")
-    end
-    local date = formatReleaseDate(release)
+    local repo_prefix = (owner and repo_name) and string.format("[%s/%s] ", owner, repo_name) or ""
     local result
-    if date then
-        result = string.format(_("Download options — %s (%s)"), label, date)
+    if not label then
+        result = repo_prefix .. _("Download options")
     else
-        result = string.format(_("Download options — %s"), label)
+        local date = formatReleaseDate(release)
+        if date then
+            result = repo_prefix .. string.format(_("Download options — %s (%s)"), label, date)
+        else
+            result = repo_prefix .. string.format(_("Download options — %s"), label)
+        end
     end
     
     if owner and repo_name and tag and isReleaseIgnored(owner, repo_name, tag) then
@@ -5012,7 +5037,10 @@ function Storefront:promptPluginInstallOptions(repo, release_override)
         return
     end
 
+    local saved_ctx = self.pending_install_context
+
     NetworkMgr:runWhenOnline(function()
+        self.pending_install_context = saved_ctx
         local release, release_err
         if release_override then
             release = release_override
@@ -5031,6 +5059,7 @@ function Storefront:promptPluginInstallOptions(repo, release_override)
             text = _("Direct download from repo"),
             callback = function()
                 UIManager:close(dialog)
+                self.pending_install_context = saved_ctx
                 self:installPluginFromRepo(repo)
             end,
         })
@@ -5055,7 +5084,9 @@ function Storefront:promptPluginInstallOptions(repo, release_override)
                     text = string.format(_("Choose asset… (%d available)"), #custom_assets),
                     callback = function()
                         UIManager:close(dialog)
+                        self.pending_install_context = saved_ctx
                         self:renderAssetListPage(repo, release, custom_assets, 1, function(asset)
+                            self.pending_install_context = saved_ctx
                             self:installPluginFromReleaseAsset(repo, release, asset)
                         end)
                     end,
@@ -5066,6 +5097,7 @@ function Storefront:promptPluginInstallOptions(repo, release_override)
                         text = asset.name,
                         callback = function()
                             UIManager:close(dialog)
+                            self.pending_install_context = saved_ctx
                             self:installPluginFromReleaseAsset(repo, release, asset)
                         end,
                     })
@@ -5078,6 +5110,7 @@ function Storefront:promptPluginInstallOptions(repo, release_override)
                 text = source_code_name,
                 callback = function()
                     UIManager:close(dialog)
+                    self.pending_install_context = saved_ctx
                     local source_asset = {
                         name = source_code_name,
                         browser_download_url = release.zipball_url,
@@ -5431,6 +5464,8 @@ function Storefront:installPluginFromReleaseAsset(repo, release, asset)
         return
     end
 
+    StorefrontLogger.action(string.format("DOWNLOAD asset: url=%s asset=%s repo=%s", url, tostring(asset.name), repo and (repo.full_name or repo.name) or "?"))
+
     NetworkMgr:runWhenOnline(function()
         local cache_dir = ensureCacheDir()
         local downloads_dir = cache_dir .. "/downloads"
@@ -5447,6 +5482,7 @@ function Storefront:installPluginFromReleaseAsset(repo, release, asset)
         UIManager:close(progress)
         if not ok then
             util.removeFile(zip_path)
+            StorefrontLogger.err(string.format("Download failed: %s (url=%s)", tostring(err), url))
             UIManager:show(InfoMessage:new{ text = _("Download failed: ") .. tostring(err), timeout = 6 })
             return
         end
@@ -5454,6 +5490,7 @@ function Storefront:installPluginFromReleaseAsset(repo, release, asset)
         local reader = Archiver.Reader:new()
         if not reader:open(zip_path) then
             util.removeFile(zip_path)
+            StorefrontLogger.err(string.format("Failed to open archive for repo=%s", repo and repo.name or "?"))
             UIManager:show(InfoMessage:new{ text = _("Failed to open downloaded archive."), timeout = 6 })
             return
         end
@@ -5462,9 +5499,12 @@ function Storefront:installPluginFromReleaseAsset(repo, release, asset)
         if not info then
             reader:close()
             util.removeFile(zip_path)
+            StorefrontLogger.err(string.format("Plugin detection failed: %s", tostring(detect_err)))
             UIManager:show(InfoMessage:new{ text = detect_err or _("Could not detect plugin inside archive."), timeout = 6 })
             return
         end
+
+        StorefrontLogger.action(string.format("DETECTED plugin inside archive: dirname=%s, plugin_name=%s, version=%s", tostring(info.plugin_dirname), tostring(info.plugin_name), tostring(info.plugin_version)))
 
         -- Store the release tag so it gets persisted in the install record.
         if release and release.tag_name and release.tag_name ~= "" then
@@ -6625,8 +6665,12 @@ function Storefront:makeRepoMenuItem(repo, installed_lookup)
             is_installed = true
         elseif repo.id and installed_lookup["id:" .. tostring(repo.id)] then
             is_installed = true
-        elseif repo.name and (installed_lookup[repo.name] or installed_lookup[repo.name:lower()]) then
-            is_installed = true
+        elseif installed_lookup.unmatched and repo.name then
+            local low_name = repo.name:lower()
+            local base_name = low_name:gsub("%.koplugin$", "")
+            if installed_lookup.unmatched[low_name] or installed_lookup.unmatched[base_name] then
+                is_installed = true
+            end
         end
     end
     local stars = repoStarsValue(repo)
@@ -7552,36 +7596,37 @@ function Storefront:getInstalledLookup()
     if cache and cache.generation == generation then
         return cache.lookup
     end
-    local lookup = {}
+    local lookup = { exact = {}, unmatched = {} }
     for _, rec in pairs(getInstallRecordsMap()) do
         local full_name = rec.repo_full_name
         if not full_name and rec.owner and rec.repo then
             full_name = rec.owner .. "/" .. rec.repo
         end
+        local has_exact = false
         if full_name then
+            has_exact = true
             lookup[full_name] = true
             lookup[full_name:lower()] = true
+            lookup.exact[full_name] = true
+            lookup.exact[full_name:lower()] = true
         end
         if rec.repo_id then
+            has_exact = true
             lookup["id:" .. tostring(rec.repo_id)] = true
+            lookup.exact["id:" .. tostring(rec.repo_id)] = true
         end
-        if rec.dirname then
-            lookup[rec.dirname] = true
-            lookup[rec.dirname:lower()] = true
-            local base_dir = rec.dirname:gsub("%.koplugin$", "")
-            lookup[base_dir] = true
-            lookup[base_dir:lower()] = true
-        end
-        if rec.repo then
-            lookup[rec.repo] = true
-            lookup[rec.repo:lower()] = true
-            local base_repo = rec.repo:gsub("%.koplugin$", "")
-            lookup[base_repo] = true
-            lookup[base_repo:lower()] = true
-        end
-        if rec.name then
-            lookup[rec.name] = true
-            lookup[rec.name:lower()] = true
+
+        if not has_exact then
+            if rec.dirname then
+                local low = rec.dirname:lower()
+                local base = low:gsub("%.koplugin$", "")
+                lookup[rec.dirname] = true
+                lookup[low] = true
+                lookup[base] = true
+                lookup.unmatched[rec.dirname] = true
+                lookup.unmatched[low] = true
+                lookup.unmatched[base] = true
+            end
         end
     end
     self._installed_lookup_cache = { generation = generation, lookup = lookup }
@@ -7693,21 +7738,36 @@ local function detectPluginFromArchive(reader, repo)
     local plugin_root
     local plugin_dirname
     local meta_entry_path
+    local shortest_meta_path_len
 
     for entry in reader:iterate() do
-        if entry.mode == "file" and entry.path:match("^_meta%.lua$") then
-            meta_entry_path = entry.path
-            plugin_root = ""
-        elseif entry.mode == "file" and entry.path:match("%.koplugin/_meta%.lua$") then
-            meta_entry_path = entry.path
-            plugin_root = entry.path:match("(.+%.koplugin)/_meta%.lua$")
-            if plugin_root then
-                plugin_dirname = plugin_root:match("([^/]+%.koplugin)$")
+        if entry.mode == "file" then
+            local path = entry.path
+            if path:match("^_meta%.lua$") then
+                if not shortest_meta_path_len or #path < shortest_meta_path_len then
+                    meta_entry_path = path
+                    plugin_root = ""
+                    plugin_dirname = nil
+                    shortest_meta_path_len = #path
+                end
+            elseif path:match("%.koplugin/_meta%.lua$") then
+                if not shortest_meta_path_len or #path < shortest_meta_path_len then
+                    meta_entry_path = path
+                    local root = path:match("(.+%.koplugin)/_meta%.lua$")
+                    if root then
+                        plugin_root = root
+                        plugin_dirname = root:match("([^/]+%.koplugin)$")
+                        shortest_meta_path_len = #path
+                    end
+                end
+            elseif not meta_entry_path and path:match("/_meta%.lua$") then
+                if not shortest_meta_path_len or #path < shortest_meta_path_len then
+                    meta_entry_path = path
+                    plugin_root = path:match("(.+)/_meta%.lua$")
+                    plugin_dirname = nil
+                    shortest_meta_path_len = #path
+                end
             end
-            break
-        elseif not meta_entry_path and entry.mode == "file" and entry.path:match("/_meta%.lua$") then
-            meta_entry_path = entry.path
-            plugin_root = entry.path:match("(.+)/_meta%.lua$")
         end
     end
 
@@ -8077,6 +8137,8 @@ function Storefront:_installPluginFromRepoInternal(repo)
         })
         return
     end
+
+    StorefrontLogger.action(string.format("INSTALL direct repo starting: %s/%s", owner, repo.name))
 
     local url
     local branch = repo.default_branch or (repo.data and repo.data.default_branch) or "main"
@@ -8624,6 +8686,7 @@ function Storefront:refreshCache(kind)
     self.is_refreshing = true
     self.patch_cache = {}
     self._repo_descriptors_cache = nil
+    StorefrontLogger.info(string.format("CACHE REFRESH starting (kind=%s)", tostring(kind)))
     local progress = InfoMessage:new{ text = _("Refreshing Storefront cache..."), timeout = 0 }
     UIManager:show(progress)
 
@@ -8669,9 +8732,11 @@ function Storefront:refreshCache(kind)
     self.is_refreshing = false
 
     if ok then
+        StorefrontLogger.info(string.format("CACHE REFRESH complete: %s", tostring(summary)))
         UIManager:show(InfoMessage:new{ text = summary or _("Storefront cache refreshed."), timeout = 5 })
     else
         local message = tostring(err)
+        StorefrontLogger.err(string.format("CACHE REFRESH failed: %s", message))
         UIManager:show(InfoMessage:new{ text = _("Storefront refresh failed: ") .. message, timeout = 6 })
     end
 end
