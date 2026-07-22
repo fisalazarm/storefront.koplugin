@@ -20,6 +20,7 @@ local RepoContent = require("storefront_repo_content")
 local TextViewer = require("ui/widget/textviewer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local HtmlBoxWidget = require("ui/widget/htmlboxwidget")
+local StorefrontImageModal = require("storefront_image_modal")
 local util = require("util")
 
 local Input = Device.input
@@ -478,6 +479,10 @@ img { max-width: 100%%; height: auto; display: block; margin-left: auto; margin-
     local html_box = HtmlBoxWidget:new{
         dimen = Geom:new{ w = readme_w, h = readme_h },
         dialog = self,
+        html_link_tapped_callback = function(link)
+            local href = (type(link) == "table" and (link.uri or link.url)) or (type(link) == "string" and link) or ""
+            return self:onLinkTap(href)
+        end,
     }
     html_box:setContent("<p style='text-align:center;color:gray;'>" .. _("Loading README...") .. "</p>", readme_css, sc(18))
 
@@ -650,6 +655,20 @@ img { max-width: 100%%; height: auto; display: block; margin-left: auto; margin-
         height = self.screen_h,
         content_group,
     }
+end
+
+function StorefrontDetailsDialog:onLinkTap(href)
+    if href and type(href) == "string" and href:find("^storefront%-img:") then
+        local img_path = href:gsub("^storefront%-img:", "")
+        local title_str = self.repo and (self.repo.name or self.repo.full_name) or _("Image View")
+        local img_modal = StorefrontImageModal:new{
+            image_path = img_path,
+            title = title_str,
+        }
+        img_modal:show()
+        return true
+    end
+    return false
 end
 
 function StorefrontDetailsDialog:onClose()
