@@ -424,6 +424,9 @@ body, .markdown-body, div { margin: 0 !important; padding: 0 !important; font-fa
 p, ul, ol, li, blockquote { font-family: %s !important; margin-top: 0.5em !important; margin-bottom: 0.5em !important; }
 h1, h2, h3, h4, h5, h6 { font-family: %s !important; margin-top: 0.8em !important; margin-bottom: 0.4em !important; }
 img { max-width: 100%%; height: auto; display: block; margin-left: auto; margin-right: auto; }
+ul, ol { padding-left: 1.3em !important; margin-left: 0 !important; }
+li { margin-left: 0 !important; padding-left: 0.1em !important; }
+li > ul, li > ol { padding-left: 1.1em !important; }
 ]=], font_declarations, sans_family, sans_family, serif_family)
 
     local html_box = HtmlBoxWidget:new{
